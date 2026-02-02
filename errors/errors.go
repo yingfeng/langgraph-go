@@ -3,6 +3,8 @@ package errors
 
 import (
 	"fmt"
+	"runtime"
+	"strings"
 )
 
 // ErrorCode represents specific error codes for LangGraph.
@@ -19,6 +21,18 @@ const (
 	ErrorCodeMultipleSubgraphs ErrorCode = "MULTIPLE_SUBGRAPHS"
 	// ErrorCodeInvalidChatHistory is raised for invalid chat history.
 	ErrorCodeInvalidChatHistory ErrorCode = "INVALID_CHAT_HISTORY"
+	// ErrorCodeCheckpointConflict is raised when there is a checkpoint version conflict.
+	ErrorCodeCheckpointConflict ErrorCode = "CHECKPOINT_CONFLICT"
+	// ErrorCodeInvalidState is raised when the state is invalid.
+	ErrorCodeInvalidState ErrorCode = "INVALID_STATE"
+	// ErrorCodeNodeNotFound is raised when a node is not found.
+	ErrorCodeNodeNotFound ErrorCode = "NODE_NOT_FOUND"
+	// ErrorCodeChannelNotFound is raised when a channel is not found.
+	ErrorCodeChannelNotFound ErrorCode = "CHANNEL_NOT_FOUND"
+	// ErrorCodeTimeout is raised when a timeout occurs.
+	ErrorCodeTimeout ErrorCode = "TIMEOUT"
+	// ErrorCodeCancellation is raised when the execution is cancelled.
+	ErrorCodeCancellation ErrorCode = "CANCELLATION"
 )
 
 // CreateErrorMessage creates an error message with troubleshooting information.
@@ -28,6 +42,199 @@ func CreateErrorMessage(message string, errorCode ErrorCode) string {
 		message,
 		errorCode,
 	)
+}
+
+// ErrorContext provides additional context about an error.
+type ErrorContext struct {
+	// ErrorCode is the specific error code.
+	ErrorCode ErrorCode
+	// Message is the error message.
+	Message string
+	// StackTrace is the stack trace at the point of error.
+	StackTrace []string
+	// Cause is the underlying cause of this error.
+	Cause error
+	// Metadata contains additional error metadata.
+	Metadata map[string]interface{}
+}
+
+// NewErrorContext creates a new error context.
+func NewErrorContext(code ErrorCode, message string, cause error) *ErrorContext {
+	return &ErrorContext{
+		ErrorCode:  code,
+		Message:    message,
+		StackTrace: captureStackTrace(2), // Skip captureStackTrace and NewErrorContext
+		Cause:      cause,
+		Metadata:   make(map[string]interface{}),
+	}
+}
+
+// Error returns the error message with context.
+func (ec *ErrorContext) Error() string {
+	var sb strings.Builder
+	
+	sb.WriteString(fmt.Sprintf("[%s] %s", ec.ErrorCode, ec.Message))
+	
+	if ec.Cause != nil {
+		sb.WriteString(fmt.Sprintf("\nCaused by: %s", ec.Cause.Error()))
+	}
+	
+	if len(ec.StackTrace) > 0 {
+		sb.WriteString("\nStack trace:")
+		for _, frame := range ec.StackTrace {
+			sb.WriteString(fmt.Sprintf("\n  %s", frame))
+		}
+	}
+	
+	if len(ec.Metadata) > 0 {
+		sb.WriteString("\nMetadata:")
+		for k, v := range ec.Metadata {
+			sb.WriteString(fmt.Sprintf("\n  %s: %v", k, v))
+		}
+	}
+	
+	return sb.String()
+}
+
+// Unwrap returns the underlying cause.
+func (ec *ErrorContext) Unwrap() error {
+	return ec.Cause
+}
+
+// AddMetadata adds metadata to the error context.
+func (ec *ErrorContext) AddMetadata(key string, value interface{}) {
+	if ec.Metadata == nil {
+		ec.Metadata = make(map[string]interface{})
+	}
+	ec.Metadata[key] = value
+}
+
+// GetMetadata gets metadata from the error context.
+func (ec *ErrorContext) GetMetadata(key string) (interface{}, bool) {
+	if ec.Metadata == nil {
+		return nil, false
+	}
+	val, ok := ec.Metadata[key]
+	return val, ok
+}
+
+// captureStackTrace captures the current stack trace.
+func captureStackTrace(skip int) []string {
+	var stack []string
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(skip, pcs)
+	if n == 0 {
+		return stack
+	}
+
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		stack = append(stack, fmt.Sprintf("%s\n\t%s:%d", frame.Function, frame.File, frame.Line))
+		if !more {
+			break
+		}
+	}
+
+	return stack
+}
+
+// WrapError wraps an error with additional context.
+func WrapError(err error, code ErrorCode, message string) error {
+	if err == nil {
+		return nil
+	}
+	
+	// If it's already an ErrorContext, just add to it
+	if ec, ok := err.(*ErrorContext); ok {
+		return &ErrorContext{
+			ErrorCode:  code,
+			Message:    message,
+			StackTrace: captureStackTrace(2),
+			Cause:      ec,
+			Metadata:   make(map[string]interface{}),
+		}
+	}
+	
+	return NewErrorContext(code, message, err)
+}
+
+// GetErrorCode extracts the error code from an error.
+func GetErrorCode(err error) ErrorCode {
+	if err == nil {
+		return ""
+	}
+	
+	// Check for ErrorContext
+	if ec, ok := err.(*ErrorContext); ok {
+		return ec.ErrorCode
+	}
+	
+	// Check for specific error types
+	if IsGraphRecursionError(err) {
+		return ErrorCodeGraphRecursionLimit
+	}
+	if IsGraphInterrupt(err) {
+		return ErrorCodeCancellation
+	}
+	if IsParentCommand(err) {
+		return ErrorCodeInvalidConcurrentGraphUpdate
+	}
+	
+	return ""
+}
+
+// GetErrorStack extracts the stack trace from an error.
+func GetErrorStack(err error) []string {
+	if err == nil {
+		return nil
+	}
+	
+	if ec, ok := err.(*ErrorContext); ok {
+		return ec.StackTrace
+	}
+	
+	return nil
+}
+
+// FormatError formats an error for display.
+func FormatError(err error) string {
+	if err == nil {
+		return ""
+	}
+	
+	var sb strings.Builder
+	
+	current := err
+	depth := 0
+	for current != nil && depth < 10 { // Prevent infinite loops
+		prefix := strings.Repeat("  ", depth)
+		sb.WriteString(fmt.Sprintf("%s%s\n", prefix, current.Error()))
+		
+		// Check for wrapped error
+		if unwrapped := fmt.Sprintf("%v", err); unwrapped != current.Error() {
+			current = fmt.Errorf("%s", unwrapped)
+		} else {
+			current = nil
+		}
+		
+		depth++
+	}
+	
+	return sb.String()
+}
+
+// ChainError creates a chain of errors for better debugging.
+func ChainError(base error, newErr error) error {
+	if newErr == nil {
+		return base
+	}
+	
+	if base == nil {
+		return newErr
+	}
+	
+	return fmt.Errorf("%s: %w", newErr, base)
 }
 
 // EmptyChannelError is raised when a channel is empty (never updated yet).

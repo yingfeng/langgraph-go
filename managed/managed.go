@@ -3,6 +3,7 @@ package managed
 
 import (
 	"fmt"
+	"reflect"
 )
 
 // ManagedValue represents a value that is managed by the runtime.
@@ -11,6 +12,8 @@ type ManagedValue interface {
 	Get(scratchpad interface{}) (interface{}, error)
 	// Copy creates a copy of this managed value.
 	Copy() ManagedValue
+	// Name returns the name of this managed value.
+	Name() string
 }
 
 // ManagedValueMapping is a collection of managed values keyed by name.
@@ -77,11 +80,300 @@ func (v *IsLastStep) Set(value bool) {
 	v.Value = value
 }
 
+// Name returns the name of this managed value.
+func (v *IsLastStep) Name() string {
+	return "IsLastStep"
+}
+
 // Copy creates a copy of this managed value.
 func (v *IsLastStep) Copy() ManagedValue {
 	return &IsLastStep{
 		Value: v.Value,
 	}
+}
+
+// IsManagedValue checks if a value is a managed value.
+func IsManagedValue(val interface{}) bool {
+	_, ok := val.(ManagedValue)
+	return ok
+}
+
+// CurrentStep provides information about the current step number.
+type CurrentStep struct {
+	// Value is the current step number.
+	Value int
+}
+
+// NewCurrentStep creates a new CurrentStep managed value.
+func NewCurrentStep() *CurrentStep {
+	return &CurrentStep{
+		Value: 0,
+	}
+}
+
+// Get returns the current step number.
+func (v *CurrentStep) Get(scratchpad interface{}) (interface{}, error) {
+	if sd, ok := scratchpad.(map[string]interface{}); ok {
+		if val, exists := sd["current_step"]; exists {
+			if num, ok := val.(int); ok {
+				v.Value = num
+			}
+		}
+	}
+	return v.Value, nil
+}
+
+// Set sets the step number.
+func (v *CurrentStep) Set(value int) {
+	v.Value = value
+}
+
+// Increment increments the step number.
+func (v *CurrentStep) Increment() {
+	v.Value++
+}
+
+// Name returns the name of this managed value.
+func (v *CurrentStep) Name() string {
+	return "CurrentStep"
+}
+
+// Copy creates a copy of this managed value.
+func (v *CurrentStep) Copy() ManagedValue {
+	return &CurrentStep{
+		Value: v.Value,
+	}
+}
+
+// ConfigValue provides access to configurable values.
+type ConfigValue struct {
+	// Key is the configuration key.
+	Key string
+	// Default is the default value if not found.
+	Default interface{}
+}
+
+// NewConfigValue creates a new ConfigValue managed value.
+func NewConfigValue(key string, defaultValue interface{}) *ConfigValue {
+	return &ConfigValue{
+		Key:     key,
+		Default: defaultValue,
+	}
+}
+
+// Get returns the configuration value.
+func (v *ConfigValue) Get(scratchpad interface{}) (interface{}, error) {
+	if sd, ok := scratchpad.(map[string]interface{}); ok {
+		if configurable, ok := sd["configurable"].(map[string]interface{}); ok {
+			if val, exists := configurable[v.Key]; exists {
+				return val, nil
+			}
+		}
+	}
+	return v.Default, nil
+}
+
+// Name returns the name of this managed value.
+func (v *ConfigValue) Name() string {
+	return fmt.Sprintf("ConfigValue[%s]", v.Key)
+}
+
+// Copy creates a copy of this managed value.
+func (v *ConfigValue) Copy() ManagedValue {
+	return &ConfigValue{
+		Key:     v.Key,
+		Default: v.Default,
+	}
+}
+
+// TaskID provides access to the current task ID.
+type TaskID struct {
+	// Value is the task ID.
+	Value string
+}
+
+// NewTaskID creates a new TaskID managed value.
+func NewTaskID() *TaskID {
+	return &TaskID{
+		Value: "",
+	}
+}
+
+// Get returns the task ID.
+func (v *TaskID) Get(scratchpad interface{}) (interface{}, error) {
+	if sd, ok := scratchpad.(map[string]interface{}); ok {
+		if val, exists := sd["task_id"]; exists {
+			if str, ok := val.(string); ok {
+				v.Value = str
+			}
+		}
+	}
+	return v.Value, nil
+}
+
+// Name returns the name of this managed value.
+func (v *TaskID) Name() string {
+	return "TaskID"
+}
+
+// Copy creates a copy of this managed value.
+func (v *TaskID) Copy() ManagedValue {
+	return &TaskID{
+		Value: v.Value,
+	}
+}
+
+// NodeName provides access to the current node name.
+type NodeName struct {
+	// Value is the node name.
+	Value string
+}
+
+// NewNodeName creates a new NodeName managed value.
+func NewNodeName() *NodeName {
+	return &NodeName{
+		Value: "",
+	}
+}
+
+// Get returns the node name.
+func (v *NodeName) Get(scratchpad interface{}) (interface{}, error) {
+	if sd, ok := scratchpad.(map[string]interface{}); ok {
+		if val, exists := sd["node_name"]; exists {
+			if str, ok := val.(string); ok {
+				v.Value = str
+			}
+		}
+	}
+	return v.Value, nil
+}
+
+// Name returns the name of this managed value.
+func (v *NodeName) Name() string {
+	return "NodeName"
+}
+
+// Copy creates a copy of this managed value.
+func (v *NodeName) Copy() ManagedValue {
+	return &NodeName{
+		Value: v.Value,
+	}
+}
+
+// ManagedValueSpec specifies a managed value.
+type ManagedValueSpec struct {
+	// Name is the name of the managed value.
+	Name string
+	// Factory creates the managed value.
+	Factory func() ManagedValue
+	// Default is the default value if not managed.
+	Default interface{}
+}
+
+// NewManagedValueSpec creates a new managed value spec.
+func NewManagedValueSpec(name string, factory func() ManagedValue, defaultValue interface{}) *ManagedValueSpec {
+	return &ManagedValueSpec{
+		Name:    name,
+		Factory: factory,
+		Default: defaultValue,
+	}
+}
+
+// Create creates the managed value.
+func (s *ManagedValueSpec) Create() ManagedValue {
+	if s.Factory != nil {
+		return s.Factory()
+	}
+	return nil
+}
+
+// GetValue gets the value from scratchpad or returns default.
+func (s *ManagedValueSpec) GetValue(scratchpad interface{}) interface{} {
+	// Only try to get value from scratchpad if it's not nil/empty
+	if scratchpad != nil {
+		if s.Factory != nil {
+			mv := s.Factory()
+			if val, err := mv.Get(scratchpad); err == nil {
+				return val
+			}
+		}
+	}
+	return s.Default
+}
+
+// IsValueManaged checks if a value is managed based on its type.
+func IsValueManaged(val interface{}) bool {
+	if val == nil {
+		return false
+	}
+	return IsManagedValue(val) || IsManagedValueSpec(val)
+}
+
+// IsManagedValueSpec checks if a value is a managed value spec.
+func IsManagedValueSpec(val interface{}) bool {
+	_, ok := val.(*ManagedValueSpec)
+	return ok
+}
+
+// GetManagedValueName returns the name of a managed value or spec.
+func GetManagedValueName(val interface{}) string {
+	if mv, ok := val.(ManagedValue); ok {
+		return mv.Name()
+	}
+	if spec, ok := val.(*ManagedValueSpec); ok {
+		return spec.Name
+	}
+	return ""
+}
+
+// ExtractManagedValues extracts managed values from a struct.
+func ExtractManagedValues(obj interface{}) []ManagedValue {
+	result := []ManagedValue{}
+	
+	v := reflect.ValueOf(obj)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	
+	if v.Kind() != reflect.Struct {
+		return result
+	}
+	
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if IsManagedValue(field.Interface()) {
+			if mv, ok := field.Interface().(ManagedValue); ok {
+				result = append(result, mv)
+			}
+		}
+	}
+	
+	return result
+}
+
+// ExtractManagedValueSpecs extracts managed value specs from a struct.
+func ExtractManagedValueSpecs(obj interface{}) []*ManagedValueSpec {
+	result := []*ManagedValueSpec{}
+	
+	v := reflect.ValueOf(obj)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	
+	if v.Kind() != reflect.Struct {
+		return result
+	}
+	
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if IsManagedValueSpec(field.Interface()) {
+			if spec, ok := field.Interface().(*ManagedValueSpec); ok {
+				result = append(result, spec)
+			}
+		}
+	}
+	
+	return result
 }
 
 // PregelScratchpad provides temporary storage for graph execution.

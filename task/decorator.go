@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/langgraph-go/langgraph/graph"
 	"github.com/langgraph-go/langgraph/types"
 )
 
@@ -185,9 +186,14 @@ func Task(fn types.NodeFunc, opts ...DecoratorOption) types.NodeFunc {
 
 // Entrypoint marks a function as a graph entrypoint.
 type Entrypoint struct {
-	name     string
-	fn       types.NodeFunc
-	metadata map[string]interface{}
+	name         string
+	fn           types.NodeFunc
+	metadata     map[string]interface{}
+	checkpointer interface{}
+	store        interface{}
+	configurable map[string]interface{}
+	graph        *graph.StateGraph
+	compiled     bool
 }
 
 // NewEntrypoint creates a new entrypoint.
@@ -196,10 +202,67 @@ func NewEntrypoint(name string, fn types.NodeFunc, metadata map[string]interface
 		metadata = make(map[string]interface{})
 	}
 	return &Entrypoint{
-		name:     name,
-		fn:       fn,
-		metadata: metadata,
+		name:         name,
+		fn:           fn,
+		metadata:     metadata,
+		checkpointer: nil,
+		store:        nil,
+		configurable:  make(map[string]interface{}),
+		graph:        nil,
+		compiled:     false,
 	}
+}
+
+// EntrypointOption configures an entrypoint.
+type EntrypointOption func(*Entrypoint)
+
+// WithEntrypointCheckpointer sets the checkpointer for the entrypoint.
+func WithEntrypointCheckpointer(cp interface{}) EntrypointOption {
+	return func(e *Entrypoint) {
+		e.checkpointer = cp
+	}
+}
+
+// WithEntrypointStore sets the store for the entrypoint.
+func WithEntrypointStore(st interface{}) EntrypointOption {
+	return func(e *Entrypoint) {
+		e.store = st
+	}
+}
+
+// WithEntrypointConfigurable sets configurable values for the entrypoint.
+func WithEntrypointConfigurable(configurable map[string]interface{}) EntrypointOption {
+	return func(e *Entrypoint) {
+		e.configurable = configurable
+	}
+}
+
+// WithEntrypointGraph sets the graph for the entrypoint.
+func WithEntrypointGraph(g *graph.StateGraph) EntrypointOption {
+	return func(e *Entrypoint) {
+		e.graph = g
+	}
+}
+
+// NewEntrypointWithOptions creates a new entrypoint with options.
+func NewEntrypointWithOptions(name string, fn types.NodeFunc, metadata map[string]interface{}, opts ...EntrypointOption) *Entrypoint {
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+	e := &Entrypoint{
+		name:         name,
+		fn:           fn,
+		metadata:     metadata,
+		checkpointer: nil,
+		store:        nil,
+		configurable:  make(map[string]interface{}),
+		graph:        nil,
+		compiled:     false,
+	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // Name returns the entrypoint name.
@@ -210,6 +273,153 @@ func (e *Entrypoint) Name() string {
 // Execute executes the entrypoint.
 func (e *Entrypoint) Execute(ctx context.Context, input interface{}) (interface{}, error) {
 	return e.fn(ctx, input)
+}
+
+// Compile compiles the graph associated with this entrypoint.
+func (e *Entrypoint) Compile(ctx context.Context) error {
+	if e.graph == nil {
+		return fmt.Errorf("no graph associated with entrypoint")
+	}
+	if e.compiled {
+		return nil
+	}
+
+	// Set checkpointer if provided (via config)
+	if e.checkpointer != nil {
+		// Note: In a full implementation, this would set the checkpointer
+		// on the graph's configuration
+	}
+
+	// Set store if provided (via config)
+	if e.store != nil {
+		// Note: In a full implementation, this would set the store
+		// on the graph's configuration
+	}
+
+	e.compiled = true
+	return nil
+}
+
+// Invoke invokes the graph with the given input.
+func (e *Entrypoint) Invoke(ctx context.Context, input interface{}, config *types.RunnableConfig) (interface{}, error) {
+	// Compile if not already compiled
+	if !e.compiled {
+		if err := e.Compile(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	// Merge configurable values
+	if config == nil {
+		config = types.NewRunnableConfig()
+	}
+	for k, v := range e.configurable {
+		config.Set(k, v)
+	}
+
+	// Invoke the graph
+	if e.graph == nil {
+		// If no graph, just execute the function
+		return e.Execute(ctx, input)
+	}
+
+	// Note: In a full implementation, this would use the graph's Invoke method
+	// For now, we just execute the function
+	return e.Execute(ctx, input)
+}
+
+// AInvoke invokes the graph asynchronously with the given input.
+func (e *Entrypoint) AInvoke(ctx context.Context, input interface{}, config *types.RunnableConfig) <-chan struct{} {
+	result := make(chan struct{}, 1)
+
+	go func() {
+		defer close(result)
+		_, err := e.Invoke(ctx, input, config)
+		if err != nil {
+			// In a full implementation, we'd return the error
+			// For now, we just log or handle it
+			_ = err
+		}
+	}()
+
+	return result
+}
+
+// Stream streams the output of the graph execution.
+func (e *Entrypoint) Stream(ctx context.Context, input interface{}, config *types.RunnableConfig, mode types.StreamMode) (<-chan interface{}, error) {
+	// Compile if not already compiled
+	if !e.compiled {
+		if err := e.Compile(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	// Merge configurable values
+	if config == nil {
+		config = types.NewRunnableConfig()
+	}
+	for k, v := range e.configurable {
+		config.Set(k, v)
+	}
+
+	// Stream from the graph
+	if e.graph == nil {
+		// If no graph, just execute the function
+		output, err := e.Execute(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		ch := make(chan interface{}, 1)
+		ch <- output
+		close(ch)
+		return ch, nil
+	}
+
+	// Note: In a full implementation, this would use the graph's Stream method
+	// For now, we just execute the function
+	output, err := e.Execute(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan interface{}, 1)
+	ch <- output
+	close(ch)
+	return ch, nil
+}
+
+// AStream streams the output of the graph execution asynchronously.
+func (e *Entrypoint) AStream(ctx context.Context, input interface{}, config *types.RunnableConfig, mode types.StreamMode) (<-chan interface{}, error) {
+	return e.Stream(ctx, input, config, mode)
+}
+
+// Batch invokes the graph with multiple inputs.
+func (e *Entrypoint) Batch(ctx context.Context, inputs []interface{}, config *types.RunnableConfig) ([]interface{}, error) {
+	results := make([]interface{}, len(inputs))
+	
+	for i, input := range inputs {
+		output, err := e.Invoke(ctx, input, config)
+		if err != nil {
+			return nil, fmt.Errorf("batch invocation failed at index %d: %w", i, err)
+		}
+		results[i] = output
+	}
+	
+	return results, nil
+}
+
+// ABatch invokes the graph with multiple inputs asynchronously.
+func (e *Entrypoint) ABatch(ctx context.Context, inputs []interface{}, config *types.RunnableConfig) <-chan struct{} {
+	result := make(chan struct{}, 1)
+
+	go func() {
+		defer close(result)
+		_, err := e.Batch(ctx, inputs, config)
+		if err != nil {
+			_ = err
+		}
+	}()
+
+	return result
 }
 
 // EntrypointDecorator creates an entrypoint decorator.

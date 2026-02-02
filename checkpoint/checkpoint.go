@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/langgraph-go/langgraph/types"
 )
 
 // CheckpointMetadata contains metadata about a checkpoint.
@@ -50,6 +51,22 @@ type PendingWrite struct {
 	Overwrite bool
 	// Node that initiated this write
 	Node string
+	// Timestamp when this write was created
+	Timestamp time.Time
+	// TaskID is the ID of the task that created this write
+	TaskID string
+}
+
+// NewPendingWrite creates a new pending write.
+func NewPendingWrite(channel string, value interface{}, overwrite bool, node, taskID string) *PendingWrite {
+	return &PendingWrite{
+		Channel:   channel,
+		Value:     value,
+		Overwrite: overwrite,
+		Node:      node,
+		Timestamp: time.Now(),
+		TaskID:    taskID,
+	}
 }
 
 // Checkpoint represents a complete checkpoint with versioning.
@@ -343,11 +360,86 @@ func getBool(m map[string]interface{}, key string, defaultVal bool) bool {
 	return defaultVal
 }
 
-// CheckpointManager manages checkpoints with versioning.
+// CheckpointTuple represents a checkpoint with its parent and version information.
+type CheckpointTuple struct {
+	// Config is the configuration used to fetch this checkpoint
+	Config *types.RunnableConfig
+	// Checkpoint is the checkpoint data
+	Checkpoint *Checkpoint
+	// ParentConfig is the configuration used to fetch the parent checkpoint
+	ParentConfig *types.RunnableConfig
+	// Metadata about this checkpoint
+	Metadata map[string]interface{}
+}
+
+// NewCheckpointTuple creates a new checkpoint tuple.
+func NewCheckpointTuple(config *types.RunnableConfig, checkpoint *Checkpoint, parentConfig *types.RunnableConfig) *CheckpointTuple {
+	if config == nil {
+		config = types.NewRunnableConfig()
+	}
+	
+	metadata := make(map[string]interface{})
+	if checkpoint != nil {
+		metadata["id"] = checkpoint.ID
+		metadata["version"] = checkpoint.Version
+		metadata["thread_id"] = checkpoint.Metadata.ThreadID
+		metadata["step"] = checkpoint.Metadata.Step
+		metadata["source"] = string(checkpoint.Metadata.Source)
+		metadata["created_at"] = checkpoint.Metadata.CreatedAt
+	}
+	
+	return &CheckpointTuple{
+		Config:       config,
+		Checkpoint:   checkpoint,
+		ParentConfig: parentConfig,
+		Metadata:    metadata,
+	}
+}
+
+// PutWrites represents a set of writes to apply to a checkpoint.
+type PutWrites struct {
+	// Config is the configuration for the checkpoint
+	Config *types.RunnableConfig
+	// Writes are the writes to apply
+	Writes []PendingWrite
+	// TaskID is the ID of the task that created these writes
+	TaskID string
+}
+
+// NewPutWrites creates a new PutWrites.
+func NewPutWrites(config *types.RunnableConfig, writes []PendingWrite, taskID string) *PutWrites {
+	return &PutWrites{
+		Config: config,
+		Writes: writes,
+		TaskID: taskID,
+	}
+}
+
+// VersionConflictError is raised when there is a version conflict.
+type VersionConflictError struct {
+	CurrentVersion int
+	ExpectedVersion int
+	CheckpointID    string
+	ThreadID        string
+}
+
+func (e *VersionConflictError) Error() string {
+	return fmt.Sprintf(
+		"version conflict: expected version %d but found %d for checkpoint %s in thread %s",
+		e.ExpectedVersion,
+		e.CurrentVersion,
+		e.CheckpointID,
+		e.ThreadID,
+	)
+}
+
+// CheckpointManager manages checkpoints with versioning and concurrency control.
 type CheckpointManager struct {
 	mu          sync.RWMutex
 	checkpoints map[string][]*Checkpoint // threadID -> checkpoints
 	maxVersions int // Maximum versions to keep per thread
+	// Track active writes for conflict detection
+	activeWrites map[string]*PutWrites // checkpointID -> PutWrites
 }
 
 // NewCheckpointManager creates a new checkpoint manager.
@@ -355,28 +447,90 @@ func NewCheckpointManager(maxVersions int) *CheckpointManager {
 	if maxVersions <= 0 {
 		maxVersions = 100 // Default max versions
 	}
-	
+
 	return &CheckpointManager{
-		checkpoints: make(map[string][]*Checkpoint),
-		maxVersions: maxVersions,
+		checkpoints:  make(map[string][]*Checkpoint),
+		maxVersions:  maxVersions,
+		activeWrites: make(map[string]*PutWrites),
 	}
 }
 
-// Save saves a checkpoint.
+// Save saves a checkpoint with version conflict detection.
 func (cm *CheckpointManager) Save(ctx context.Context, checkpoint *Checkpoint) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	
+
 	threadID := checkpoint.Metadata.ThreadID
-	
+
+	// Check for version conflict if this is an update
+	if checkpoint.ParentID != "" {
+		if checkpoints := cm.checkpoints[threadID]; len(checkpoints) > 0 {
+			latest := checkpoints[len(checkpoints)-1]
+			if latest.ID == checkpoint.ParentID && latest.Version != checkpoint.Version-1 {
+				return &VersionConflictError{
+					CurrentVersion: checkpoint.Version,
+					ExpectedVersion: latest.Version + 1,
+					CheckpointID:    checkpoint.ID,
+					ThreadID:        threadID,
+				}
+			}
+		}
+	}
+
 	// Append to thread's checkpoint history
 	cm.checkpoints[threadID] = append(cm.checkpoints[threadID], checkpoint)
-	
+
 	// Trim if we have too many versions
 	if len(cm.checkpoints[threadID]) > cm.maxVersions {
 		cm.checkpoints[threadID] = cm.checkpoints[threadID][len(cm.checkpoints[threadID])-cm.maxVersions:]
 	}
-	
+
+	return nil
+}
+
+// PutWrites applies writes to a checkpoint with conflict detection.
+func (cm *CheckpointManager) PutWrites(ctx context.Context, config *types.RunnableConfig, writes []PendingWrite, taskID string) error {
+	threadID := config.ThreadID
+	if threadID == "" {
+		return fmt.Errorf("thread ID is required for put_writes")
+	}
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Load the current checkpoint for this thread
+	checkpoints := cm.checkpoints[threadID]
+	if len(checkpoints) == 0 {
+		return fmt.Errorf("no checkpoint found for thread %s", threadID)
+	}
+
+	current := checkpoints[len(checkpoints)-1]
+
+	// Check if there are conflicting active writes
+	if existingWrites, exists := cm.activeWrites[current.ID]; exists && existingWrites.TaskID != taskID {
+		return fmt.Errorf("conflicting writes detected for checkpoint %s from task %s", current.ID, existingWrites.TaskID)
+	}
+
+	// Record active writes
+	cm.activeWrites[current.ID] = NewPutWrites(config, writes, taskID)
+
+	// Create a new checkpoint with the writes applied
+	newCheckpoint := current.Clone()
+	newCheckpoint.Version = current.Version + 1
+	newCheckpoint.ParentID = current.ID
+
+	// Apply writes
+	for _, write := range writes {
+		newCheckpoint.State[write.Channel] = write.Value
+		newCheckpoint.IncrementChannel(write.Channel)
+	}
+
+	// Save the new checkpoint
+	cm.checkpoints[threadID] = append(cm.checkpoints[threadID], newCheckpoint)
+
+	// Clear active writes
+	delete(cm.activeWrites, current.ID)
+
 	return nil
 }
 
@@ -433,18 +587,124 @@ func (cm *CheckpointManager) List(ctx context.Context, threadID string, limit in
 	return result, nil
 }
 
+// GetTuple loads a checkpoint and its parent as a tuple.
+func (cm *CheckpointManager) GetTuple(ctx context.Context, config *types.RunnableConfig) (*CheckpointTuple, error) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	threadID := config.ThreadID
+	if threadID == "" {
+		return nil, fmt.Errorf("thread ID is required")
+	}
+
+	checkpoints := cm.checkpoints[threadID]
+	if len(checkpoints) == 0 {
+		return NewCheckpointTuple(config, nil, nil), nil
+	}
+
+	// Get the latest checkpoint
+	latest := checkpoints[len(checkpoints)-1].Clone()
+
+	// Get parent checkpoint
+	var parent *Checkpoint
+	if len(checkpoints) > 1 {
+		parent = checkpoints[len(checkpoints)-2].Clone()
+	}
+
+	// Create parent config
+	var parentConfig *types.RunnableConfig
+	if parent != nil {
+		parentConfig = types.NewRunnableConfig()
+		parentConfig.ThreadID = threadID
+		parentConfig.Set("checkpoint_id", parent.ID)
+	}
+
+	return NewCheckpointTuple(config, latest, parentConfig), nil
+}
+
+// GetTupleByVersion gets a checkpoint tuple by version.
+func (cm *CheckpointManager) GetTupleByVersion(ctx context.Context, config *types.RunnableConfig, version int) (*CheckpointTuple, error) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	threadID := config.ThreadID
+	if threadID == "" {
+		return nil, fmt.Errorf("thread ID is required")
+	}
+
+	checkpoints := cm.checkpoints[threadID]
+	var target *Checkpoint
+	var parent *Checkpoint
+	var parentConfig *types.RunnableConfig
+
+	for i, cp := range checkpoints {
+		if cp.Version == version {
+			target = cp.Clone()
+			// Get parent checkpoint
+			if i > 0 {
+				parent = checkpoints[i-1].Clone()
+				parentConfig = types.NewRunnableConfig()
+				parentConfig.ThreadID = threadID
+				parentConfig.Set("checkpoint_id", parent.ID)
+			}
+			break
+		}
+	}
+
+	if target == nil {
+		return nil, fmt.Errorf("version not found: %d", version)
+	}
+
+	return NewCheckpointTuple(config, target, parentConfig), nil
+}
+
+// GetLineage gets the lineage (history) of checkpoints for a thread.
+func (cm *CheckpointManager) GetLineage(ctx context.Context, threadID string, limit int) ([]*CheckpointTuple, error) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	checkpoints := cm.checkpoints[threadID]
+	if len(checkpoints) == 0 {
+		return nil, nil
+	}
+
+	if limit <= 0 || limit > len(checkpoints) {
+		limit = len(checkpoints)
+	}
+
+	result := make([]*CheckpointTuple, 0, limit)
+	for i := len(checkpoints) - limit; i < len(checkpoints); i++ {
+		cp := checkpoints[i].Clone()
+
+		config := types.NewRunnableConfig()
+		config.ThreadID = threadID
+		config.Set("checkpoint_id", cp.ID)
+
+		var parentConfig *types.RunnableConfig
+		if i > 0 {
+			parentConfig = types.NewRunnableConfig()
+			parentConfig.ThreadID = threadID
+			parentConfig.Set("checkpoint_id", checkpoints[i-1].ID)
+		}
+
+		result = append(result, NewCheckpointTuple(config, cp, parentConfig))
+	}
+
+	return result, nil
+}
+
 // GetVersion gets a specific version of a checkpoint.
 func (cm *CheckpointManager) GetVersion(ctx context.Context, threadID string, version int) (*Checkpoint, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-	
+
 	checkpoints := cm.checkpoints[threadID]
 	for _, cp := range checkpoints {
 		if cp.Version == version {
 			return cp.Clone(), nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("version not found: %d", version)
 }
 

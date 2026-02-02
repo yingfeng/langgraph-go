@@ -19,6 +19,9 @@ type RunnableConfig struct {
 	
 	// ThreadID is the thread identifier for checkpointing
 	ThreadID string
+	
+	// Durability controls when checkpoint writes are persisted
+	Durability Durability
 }
 
 // NewRunnableConfig creates a new RunnableConfig with defaults.
@@ -28,6 +31,7 @@ func NewRunnableConfig() *RunnableConfig {
 		RecursionLimit: 25,
 		Tags:           make([]string, 0),
 		Metadata:       make(map[string]interface{}),
+		Durability:     DurabilitySync,
 	}
 }
 
@@ -82,6 +86,11 @@ func (c *RunnableConfig) Merge(other *RunnableConfig) *RunnableConfig {
 		c.ThreadID = other.ThreadID
 	}
 	
+	// Use other's Durability if set (not default)
+	if other.Durability != "" && other.Durability != DurabilitySync {
+		c.Durability = other.Durability
+	}
+	
 	return c
 }
 
@@ -118,6 +127,12 @@ func (c *RunnableConfig) WithRunID(runID string) *RunnableConfig {
 // WithThreadID returns a new config with the given thread ID.
 func (c *RunnableConfig) WithThreadID(threadID string) *RunnableConfig {
 	c.ThreadID = threadID
+	return c
+}
+
+// WithDurability returns a new config with the given durability mode.
+func (c *RunnableConfig) WithDurability(durability Durability) *RunnableConfig {
+	c.Durability = durability
 	return c
 }
 
