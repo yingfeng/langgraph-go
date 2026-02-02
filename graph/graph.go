@@ -71,6 +71,8 @@ type StateGraph struct {
 	finishPoints []string
 	// Channel definitions for the state schema
 	channels map[string]channels.Channel
+	// Reducer functions for channels
+	reducers map[string]types.ReducerFunc
 	// State schema type
 	stateSchema interface{}
 	// Input schema type
@@ -89,6 +91,7 @@ func NewStateGraph(stateSchema interface{}) *StateGraph {
 		branches:         make([]*Branch, 0),
 		finishPoints:     make([]string, 0),
 		channels:         make(map[string]channels.Channel),
+		reducers:         make(map[string]types.ReducerFunc),
 		stateSchema:      stateSchema,
 		inputSchema:      stateSchema,
 		outputSchema:     stateSchema,
@@ -245,6 +248,28 @@ func (g *StateGraph) AddChannel(name string, channel channels.Channel) {
 	g.channels[name] = channel
 }
 
+// SetReducer sets a reducer function for a channel.
+// If the channel exists, it wraps it with a ReducerChannel.
+func (g *StateGraph) SetReducer(channelName string, reducer types.ReducerFunc) {
+	if channel, ok := g.channels[channelName]; ok {
+		// Wrap existing channel with reducer
+		g.channels[channelName] = channels.NewReducerChannel(channel, reducer)
+	}
+	g.reducers[channelName] = reducer
+}
+
+// AddChannelWithReducer adds a channel definition with a reducer function.
+func (g *StateGraph) AddChannelWithReducer(name string, channel channels.Channel, reducer types.ReducerFunc) {
+	channel.SetKey(name)
+	if reducer != nil {
+		// Wrap channel with reducer
+		g.channels[name] = channels.NewReducerChannel(channel, reducer)
+		g.reducers[name] = reducer
+	} else {
+		g.channels[name] = channel
+	}
+}
+
 // GetNode returns a node by name.
 func (g *StateGraph) GetNode(name string) (*Node, bool) {
 	node, ok := g.nodes[name]
@@ -282,6 +307,11 @@ func (g *StateGraph) Validate() error {
 		if !reachable[name] {
 			return fmt.Errorf("node %s is not reachable from entry point", name)
 		}
+	}
+	
+	// Validate state schema
+	if err := g.ValidateStateSchema(); err != nil {
+		return fmt.Errorf("state schema validation failed: %w", err)
 	}
 	
 	return nil
@@ -327,10 +357,40 @@ func (g *StateGraph) computeReachable() map[string]bool {
 	return reachable
 }
 
+// configureChannelsFromSchema configures channels and reducers based on state schema annotations.
+func (g *StateGraph) configureChannelsFromSchema() error {
+	// Get field information from schema
+	fieldInfos, err := g.GetStateSchemaInfo()
+	if err != nil {
+		return err
+	}
+
+	// Configure channels and reducers for each field
+	for fieldName, info := range fieldInfos {
+		// Check if channel already exists
+		if _, exists := g.channels[fieldName]; !exists {
+			// Add channel
+			g.channels[fieldName] = info.Channel
+		}
+
+		// Set reducer if specified in annotation
+		if info.Annotation != nil && info.Annotation.Reducer != nil {
+			g.reducers[fieldName] = info.Annotation.Reducer
+		}
+	}
+
+	return nil
+}
+
 // Compile compiles the graph into an executable CompiledGraph.
 func (g *StateGraph) Compile(opts ...CompileOption) (*CompiledGraph, error) {
 	if err := g.Validate(); err != nil {
 		return nil, fmt.Errorf("graph validation failed: %w", err)
+	}
+	
+	// Configure channels and reducers from schema annotations
+	if err := g.configureChannelsFromSchema(); err != nil {
+		return nil, fmt.Errorf("failed to configure channels from schema: %w", err)
 	}
 	
 	cg := &CompiledGraph{

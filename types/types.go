@@ -280,6 +280,9 @@ func NewOverwrite(value interface{}) *Overwrite {
 	return &Overwrite{Value: value}
 }
 
+// ReducerFunc reduces multiple values into one.
+type ReducerFunc func(current, update interface{}) interface{}
+
 // NodeFunc is the signature of a node function.
 type NodeFunc func(context.Context, interface{}) (interface{}, error)
 

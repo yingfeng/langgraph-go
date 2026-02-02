@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/langgraph-go/langgraph/channels"
@@ -25,6 +24,8 @@ type Engine struct {
 	recursionLimit int
 	debug          bool
 	config         *types.RunnableConfig
+	maxConcurrency int
+	retryPolicy    *types.RetryPolicy
 }
 
 // NewEngine creates a new Pregel engine.
@@ -35,6 +36,8 @@ func NewEngine(graph interface{}, opts ...EngineOption) *Engine {
 		recursionLimit: 25,
 		debug:          false,
 		config:         types.NewRunnableConfig(),
+		maxConcurrency: 10,
+		retryPolicy:    nil,
 	}
 	
 	for _, opt := range opts {
@@ -84,6 +87,22 @@ func WithConfig(cfg *types.RunnableConfig) EngineOption {
 	}
 }
 
+// WithMaxConcurrency sets the maximum concurrency for node execution.
+func WithMaxConcurrency(max int) EngineOption {
+	return func(e *Engine) {
+		if max > 0 {
+			e.maxConcurrency = max
+		}
+	}
+}
+
+// WithRetryPolicy sets the retry policy for node execution.
+func WithRetryPolicy(policy *types.RetryPolicy) EngineOption {
+	return func(e *Engine) {
+		e.retryPolicy = policy
+	}
+}
+
 // ExecuteResult represents the result of graph execution.
 type ExecuteResult struct {
 	// Final state of the graph.
@@ -102,6 +121,27 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 	go func() {
 		defer close(outputCh)
 		defer close(errCh)
+		
+		// Create stream manager for event streaming
+		streamManager := NewStreamManager(mode, 100)
+		defer streamManager.Close()
+		
+		// Forward stream events to output channel
+		go func() {
+			for event := range streamManager.Events() {
+				outputCh <- event
+			}
+		}()
+		
+		// Create async pipeline for concurrent task execution
+		retryPolicy := e.retryPolicy
+		if retryPolicy == nil {
+			defaultPolicy := types.DefaultRetryPolicy()
+			retryPolicy = &defaultPolicy
+		}
+		asyncPipeline := NewAsyncPipeline(e.maxConcurrency, retryPolicy)
+		pipelineCtx := asyncPipeline.Start(ctx)
+		defer asyncPipeline.Stop()
 		
 		// Initialize channels
 		channelRegistry := channels.NewRegistry()
@@ -145,16 +185,8 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 				return
 			}
 			
-			// Emit checkpoint event if in debug or checkpoints mode
-			if mode == types.StreamModeCheckpoints || mode == types.StreamModeDebug {
-				checkpointData := channelRegistry.CreateCheckpoint()
-				outputCh <- map[string]interface{}{
-					"type":      "checkpoint",
-					"step":      step,
-					"checkpoint": checkpointData,
-					"timestamp": time.Now().Format(time.RFC3339Nano),
-				}
-			}
+			// Emit checkpoint event via stream manager
+			streamManager.EmitCheckpoint(step, channelRegistry.CreateCheckpoint())
 			
 			// Determine next tasks
 			tasks, triggers, err := e.prepareNextTasks(channelRegistry, completedTasks, lastCompletedNode, lastState)
@@ -163,18 +195,9 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 				return
 			}
 			
-			// Emit tasks event if in debug or tasks mode
-			if mode == types.StreamModeTasks || mode == types.StreamModeDebug {
-				taskNames := make([]string, len(tasks))
-				for i, task := range tasks {
-					taskNames[i] = task.Name
-				}
-				outputCh <- map[string]interface{}{
-					"type":  "tasks",
-					"step":  step,
-					"names": taskNames,
-					"count": len(tasks),
-				}
+			// Emit task start events
+			for _, task := range tasks {
+				streamManager.EmitTaskStart(step, task.Name, task.ID)
 			}
 			
 			// If no tasks, we're done
@@ -197,24 +220,18 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 				}
 				
 				// Emit interrupt event
-				if mode == types.StreamModeDebug {
-					interruptNames := make([]string, len(interruptedTasks))
-					for i, task := range interruptedTasks {
-						interruptNames[i] = task.Name
-					}
-					outputCh <- map[string]interface{}{
-						"type":  "interrupt",
-						"step":  step,
-						"tasks": interruptNames,
-					}
+				interruptNames := make([]string, len(interruptedTasks))
+				for i, task := range interruptedTasks {
+					interruptNames[i] = task.Name
 				}
+				streamManager.EmitInterrupt(step, interruptNames)
 				
 				errCh <- &errors.GraphInterrupt{}
 				return
 			}
 			
-			// Execute tasks
-			results, err := e.executeTasks(ctx, tasks, channelRegistry)
+			// Execute tasks using async pipeline
+			results, err := e.executeTasksAsync(pipelineCtx, tasks, channelRegistry, asyncPipeline, streamManager, step)
 			if err != nil {
 				errCh <- fmt.Errorf("failed to execute tasks: %w", err)
 				return
@@ -237,28 +254,9 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 				return
 			}
 			
-			// Emit updates if in updates mode
-			if mode == types.StreamModeUpdates {
-				for _, result := range results {
-					if result.Err == nil {
-						outputCh <- map[string]interface{}{
-							"type":    "update",
-							"node":    result.Name,
-							"output":  result.Output,
-							"step":    step,
-						}
-					}
-				}
-			}
-			
-			// Emit values if in values mode
-			if mode == types.StreamModeValues {
-				values, _ := channelRegistry.GetValues()
-				outputCh <- map[string]interface{}{
-					"type":  "values",
-					"values": values,
-					"step":  step,
-				}
+			// Emit values event
+			if values, err := channelRegistry.GetValues(); err == nil {
+				streamManager.EmitValues(step, values)
 			}
 			
 			// Save checkpoint
@@ -285,11 +283,8 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 			return
 		}
 		
-		// Emit final result
-		outputCh <- map[string]interface{}{
-			"type":  "final",
-			"state": finalState,
-		}
+		// Emit final event
+		streamManager.EmitFinal(step, finalState)
 	}()
 	
 	return outputCh, errCh
@@ -474,42 +469,139 @@ func (e *Engine) executeTasks(
 	return results, nil
 }
 
+// executeTasksAsync executes tasks using async pipeline with streaming.
+func (e *Engine) executeTasksAsync(
+	ctx context.Context,
+	tasks []*Task,
+	registry *channels.Registry,
+	asyncPipeline *AsyncPipeline,
+	streamManager *StreamManager,
+	step int,
+) ([]*TaskResult, error) {
+	results := make([]*TaskResult, len(tasks))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	
+	for i, task := range tasks {
+		wg.Add(1)
+		go func(idx int, t *Task) {
+			defer wg.Done()
+			
+			// Read input for this task
+			input, err := e.readTaskInput(registry, t)
+			if err != nil {
+				mu.Lock()
+				results[idx] = &TaskResult{
+					Name: t.Name,
+					Err:  fmt.Errorf("failed to read task input: %w", err),
+				}
+				mu.Unlock()
+				return
+			}
+			
+			// Define the function to execute
+			executeFn := func(ctx context.Context) (interface{}, error) {
+				return t.Func(ctx, input)
+			}
+			
+			// Use task's retry policy or default
+			retryPolicy := t.RetryPolicy
+			if retryPolicy == nil {
+				defaultPolicy := types.DefaultRetryPolicy()
+				retryPolicy = &defaultPolicy
+			}
+			
+			// Execute with async pipeline
+			resultCh := asyncPipeline.ExecuteNode(ctx, t.Name, executeFn, &RetryConfig{Policy: retryPolicy})
+			
+			// Wait for result
+			select {
+			case <-ctx.Done():
+				mu.Lock()
+				results[idx] = &TaskResult{
+					Name: t.Name,
+					Err:  ctx.Err(),
+				}
+				mu.Unlock()
+			case asyncResult, ok := <-resultCh:
+				if !ok {
+					mu.Lock()
+					results[idx] = &TaskResult{
+						Name: t.Name,
+						Err:  fmt.Errorf("async result channel closed unexpectedly"),
+					}
+					mu.Unlock()
+					return
+				}
+				
+				// Convert async result to task result
+				taskResult := &TaskResult{
+					Name:   t.Name,
+					Output: asyncResult.Output,
+					Err:    asyncResult.Err,
+				}
+				
+				// Emit task end event
+				streamManager.EmitTaskEnd(step, t.Name, t.ID, asyncResult.Output, asyncResult.Duration, asyncResult.Err)
+				
+				// Emit update event if successful
+				if asyncResult.Err == nil {
+					streamManager.EmitUpdate(step, t.Name, asyncResult.Output)
+				} else {
+					// Emit error event
+					streamManager.EmitError(step, asyncResult.Err, t.Name)
+				}
+				
+				mu.Lock()
+				results[idx] = taskResult
+				mu.Unlock()
+			}
+		}(i, task)
+	}
+	
+	wg.Wait()
+	return results, nil
+}
+
 // executeTask executes a single task with retry logic.
 func (e *Engine) executeTask(
 	ctx context.Context,
 	task *Task,
 	registry *channels.Registry,
 ) *TaskResult {
+	// Read input for this task
+	input, err := e.readTaskInput(registry, task)
+	if err != nil {
+		return &TaskResult{
+			Name: task.Name,
+			Err:  fmt.Errorf("failed to read task input: %w", err),
+		}
+	}
+	
+	// Use RetryExecutor for retry logic
 	retryPolicy := task.RetryPolicy
 	if retryPolicy == nil {
 		defaultPolicy := types.DefaultRetryPolicy()
 		retryPolicy = &defaultPolicy
 	}
 	
-	attempts := 0
-	var lastErr error
+	retryExecutor := NewRetryExecutor(retryPolicy)
 	
-	for attempts < retryPolicy.MaxAttempts {
-		// Read input for this task
-		input, err := e.readTaskInput(registry, task)
-		if err != nil {
+	// Define the function to execute
+	executeFn := func(ctx context.Context) (interface{}, error) {
+		return task.Func(ctx, input)
+	}
+	
+	// Execute with retry
+	output, err := retryExecutor.Execute(ctx, task.Name, executeFn)
+	if err != nil {
+		// Check if it's a retry exhausted error
+		if IsRetryExhausted(err) {
 			return &TaskResult{
 				Name: task.Name,
-				Err:  fmt.Errorf("failed to read task input: %w", err),
+				Err:  fmt.Errorf("max retries exceeded: %w", err),
 			}
 		}
-		
-		// Execute the task
-		output, err := task.Func(ctx, input)
-		if err == nil {
-			// Success
-			return &TaskResult{
-				Name:   task.Name,
-				Output: output,
-				Err:    nil,
-			}
-		}
-		
 		// Check for interrupt
 		if errors.IsGraphInterrupt(err) {
 			return &TaskResult{
@@ -517,49 +609,18 @@ func (e *Engine) executeTask(
 				Err:  err,
 			}
 		}
-		
-		lastErr = err
-		attempts++
-		
-		if attempts >= retryPolicy.MaxAttempts {
-			break
-		}
-		
-		// Check if we should retry this error
-		if retryPolicy.RetryOn != nil && !retryPolicy.RetryOn(err) {
-			break
-		}
-		
-		// Calculate wait time
-		waitTime := retryPolicy.InitialInterval
-		for i := 0; i < attempts-1; i++ {
-			waitTime = time.Duration(float64(waitTime) * retryPolicy.BackoffFactor)
-			if waitTime > retryPolicy.MaxInterval {
-				waitTime = retryPolicy.MaxInterval
-				break
-			}
-		}
-		
-		// Add jitter if configured
-		if retryPolicy.Jitter {
-			waitTime = time.Duration(float64(waitTime) * (0.5 + 0.5*float64(time.Now().UnixNano()%1000)/1000))
-		}
-		
-		// Wait before retry
-		select {
-		case <-ctx.Done():
-			return &TaskResult{
-				Name: task.Name,
-				Err:  ctx.Err(),
-			}
-		case <-time.After(waitTime):
-			// Continue to next attempt
+		// Other errors
+		return &TaskResult{
+			Name: task.Name,
+			Err:  err,
 		}
 	}
 	
+	// Success
 	return &TaskResult{
-		Name: task.Name,
-		Err:  fmt.Errorf("max retries exceeded (%d): %w", attempts, lastErr),
+		Name:   task.Name,
+		Output: output,
+		Err:    nil,
 	}
 }
 

@@ -3,7 +3,6 @@ package checkpoint
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -183,51 +182,4 @@ type CheckpointState struct {
 	Metadata   map[string]interface{}
 }
 
-// deepCopy creates a deep copy of a value using JSON serialization.
-func deepCopy(v interface{}) interface{} {
-	if v == nil {
-		return nil
-	}
-	
-	// Handle map[string]interface{}
-	if m, ok := v.(map[string]interface{}); ok {
-		return deepCopyMap(m)
-	}
-	
-	// Handle []interface{}
-	if s, ok := v.([]interface{}); ok {
-		return deepCopySlice(s)
-	}
-	
-	// For other types, try JSON marshaling
-	data, err := json.Marshal(v)
-	if err != nil {
-		// If marshaling fails, return as is
-		return v
-	}
-	
-	var result interface{}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return v
-	}
-	
-	return result
-}
 
-// deepCopyMap creates a deep copy of a map.
-func deepCopyMap(m map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{}, len(m))
-	for k, v := range m {
-		result[k] = deepCopy(v)
-	}
-	return result
-}
-
-// deepCopySlice creates a deep copy of a slice.
-func deepCopySlice(s []interface{}) []interface{} {
-	result := make([]interface{}, len(s))
-	for i, v := range s {
-		result[i] = deepCopy(v)
-	}
-	return result
-}
