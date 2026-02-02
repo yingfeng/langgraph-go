@@ -1,3 +1,4 @@
+// Package channels provides channel implementations for LangGraph Go.
 package channels
 
 import (
@@ -7,97 +8,78 @@ import (
 	"github.com/langgraph-go/langgraph/errors"
 )
 
-// NamedBarrierValue waits until all specified named nodes have written a value.
+// NamedBarrierValue waits until all specified named values are received before making the value available.
+// This implementation matches Python LangGraph's NamedBarrierValue semantics.
 type NamedBarrierValue struct {
 	BaseChannel
-	waitingFor map[string]bool
-	values    map[string]interface{}
-	mu        sync.RWMutex
+	names map[string]bool // Set of expected values
+	seen  map[string]bool // Set of received values
+	mu    sync.RWMutex
 }
 
 // NewNamedBarrierValue creates a new NamedBarrierValue channel.
+// waitFor is a slice of expected value names.
 func NewNamedBarrierValue(typ interface{}, waitFor []string) *NamedBarrierValue {
-	m := make(map[string]bool)
+	names := make(map[string]bool)
 	for _, name := range waitFor {
-		m[name] = true
+		names[name] = true
 	}
 	return &NamedBarrierValue{
 		BaseChannel: BaseChannel{Typ: typ},
-		waitingFor: m,
-		values:     make(map[string]interface{}),
+		names:       names,
+		seen:        make(map[string]bool),
 	}
 }
 
-// Get returns the value of the channel if all nodes have written.
+// Get returns the value (always nil for NamedBarrierValue) if all values have been received.
 func (c *NamedBarrierValue) Get() (interface{}, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
-	if len(c.values) == 0 {
+
+	if !c.namesMatchSeen() {
 		return nil, &errors.EmptyChannelError{}
 	}
-	
-	// Check if all values are present
-	for name := range c.waitingFor {
-		if _, ok := c.values[name]; !ok {
-			return nil, &errors.EmptyChannelError{
-				Message: fmt.Sprintf("waiting for node '%s'", name),
-			}
-		}
-	}
-	
-	// Return values as map
-	return c.values, nil
+	return nil, nil
 }
 
-// IsAvailable returns true if all nodes have written a value.
+// IsAvailable returns true if all expected values have been received.
 func (c *NamedBarrierValue) IsAvailable() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
-	if len(c.values) == 0 {
-		return false
-	}
-	
-	for name := range c.waitingFor {
-		if _, ok := c.values[name]; !ok {
-			return false
-		}
-	}
-	
-	return true
+	return c.namesMatchSeen()
 }
 
-// Update updates the channel with new values from nodes.
+// Update updates the channel with new values.
+// Each value should be a string name from the expected names set.
 func (c *NamedBarrierValue) Update(values []interface{}) (bool, error) {
 	if len(values) == 0 {
 		return false, nil
 	}
-	
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	updated := false
 	for _, val := range values {
-		// Check if this is a named value (tuple with node name and value)
-		if tuple, ok := val.([2]interface{}); ok && len(tuple) == 2 {
-			if name, ok := tuple[0].(string); ok {
-				if _, shouldWait := c.waitingFor[name]; shouldWait {
-					// Store the value
-					c.values[name] = tuple[1]
-					updated = true
-				}
+		name, ok := val.(string)
+		if !ok {
+			return false, &errors.InvalidUpdateError{
+				Message: fmt.Sprintf("value must be a string, got %T", val),
 			}
-		} else if tuple, ok := val.([]interface{}); ok && len(tuple) == 2 {
-			if name, ok := tuple[0].(string); ok {
-				if _, shouldWait := c.waitingFor[name]; shouldWait {
-					c.values[name] = tuple[1]
-					updated = true
-				}
+		}
+
+		if _, exists := c.names[name]; exists {
+			if !c.seen[name] {
+				c.seen[name] = true
+				updated = true
+			}
+		} else {
+			return false, &errors.InvalidUpdateError{
+				Message: fmt.Sprintf("value '%s' not in expected names %v", name, c.names),
 			}
 		}
 	}
-	
+
 	return updated, nil
 }
 
@@ -105,37 +87,37 @@ func (c *NamedBarrierValue) Update(values []interface{}) (bool, error) {
 func (c *NamedBarrierValue) Copy() Channel {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	newCh := NewNamedBarrierValue(c.Typ, nil)
 	newCh.Key = c.Key
-	
-	// Copy waitingFor map
-	newCh.waitingFor = make(map[string]bool, len(c.waitingFor))
-	for k, v := range c.waitingFor {
-		newCh.waitingFor[k] = v
+
+	// Copy names map
+	newCh.names = make(map[string]bool, len(c.names))
+	for k, v := range c.names {
+		newCh.names[k] = v
 	}
-	
-	// Copy values map
-	newCh.values = make(map[string]interface{}, len(c.values))
-	for k, v := range c.values {
-		newCh.values[k] = v
+
+	// Copy seen map
+	newCh.seen = make(map[string]bool, len(c.seen))
+	for k, v := range c.seen {
+		newCh.seen[k] = v
 	}
-	
+
 	return newCh
 }
 
-// Checkpoint returns the current values.
+// Checkpoint returns the seen values as a map.
 func (c *NamedBarrierValue) Checkpoint() interface{} {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
-	if len(c.values) == 0 {
+
+	if len(c.seen) == 0 {
 		return Missing
 	}
-	
-	// Return a copy of values
-	result := make(map[string]interface{}, len(c.values))
-	for k, v := range c.values {
+
+	// Return a copy of seen
+	result := make(map[string]bool, len(c.seen))
+	for k, v := range c.seen {
 		result[k] = v
 	}
 	return result
@@ -145,146 +127,134 @@ func (c *NamedBarrierValue) Checkpoint() interface{} {
 func (c *NamedBarrierValue) FromCheckpoint(checkpoint interface{}) Channel {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	newCh := NewNamedBarrierValue(c.Typ, nil)
 	newCh.Key = c.Key
-	
-	if checkpoint == nil {
-		return newCh
-	}
-	
-	// Restore values from checkpoint
-	if cp, ok := checkpoint.(map[string]interface{}); ok {
-		newCh.values = make(map[string]interface{}, len(cp))
-		for k, v := range cp {
-			newCh.values[k] = v
+
+	if checkpoint != nil && !IsMissing(checkpoint) {
+		// Restore seen from checkpoint
+		if cp, ok := checkpoint.(map[string]bool); ok {
+			newCh.seen = make(map[string]bool, len(cp))
+			for k, v := range cp {
+				newCh.seen[k] = v
+			}
 		}
 	}
-	
+
 	return newCh
 }
 
-// Finish checks if this node has completed writing.
+// Finish checks if all expected values have been received and clears them.
+// Returns true if there were values to clear.
 func (c *NamedBarrierValue) Finish() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
-	// Check if all nodes have completed
-	updated := len(c.waitingFor) > 0
-	c.waitingFor = make(map[string]bool)
-	return updated
-}
 
-// Consume marks the channel as consumed.
-func (c *NamedBarrierValue) Consume() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	
-	// Clear values after consumption
-	if len(c.values) > 0 {
-		c.values = make(map[string]interface{})
+	if len(c.seen) > 0 {
+		c.seen = make(map[string]bool)
 		return true
 	}
 	return false
 }
 
-// NamedBarrierValueAfterFinish waits for all specified nodes, but only makes value available after finish().
+// Consume resets the channel after all values have been received.
+// Returns true if the channel was consumed.
+func (c *NamedBarrierValue) Consume() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.namesMatchSeen() && len(c.seen) > 0 {
+		c.seen = make(map[string]bool)
+		return true
+	}
+	return false
+}
+
+// namesMatchSeen checks if all expected names have been seen.
+func (c *NamedBarrierValue) namesMatchSeen() bool {
+	if len(c.names) != len(c.seen) {
+		return false
+	}
+	for name := range c.names {
+		if !c.seen[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// NamedBarrierValueAfterFinish waits until all specified named values are received,
+// but only makes the value available after finish() is called.
 type NamedBarrierValueAfterFinish struct {
 	BaseChannel
-	waitingFor map[string]bool
-	values    map[string]interface{}
-	finished  bool
-	mu        sync.RWMutex
+	names    map[string]bool // Set of expected values
+	seen     map[string]bool // Set of received values
+	finished bool
+	mu       sync.RWMutex
 }
 
 // NewNamedBarrierValueAfterFinish creates a new NamedBarrierValueAfterFinish channel.
 func NewNamedBarrierValueAfterFinish(typ interface{}, waitFor []string) *NamedBarrierValueAfterFinish {
-	m := make(map[string]bool)
+	names := make(map[string]bool)
 	for _, name := range waitFor {
-		m[name] = true
+		names[name] = true
 	}
 	return &NamedBarrierValueAfterFinish{
 		BaseChannel: BaseChannel{Typ: typ},
-		waitingFor: m,
-		values:     make(map[string]interface{}),
-		finished:   false,
+		names:       names,
+		seen:        make(map[string]bool),
+		finished:     false,
 	}
 }
 
-// Get returns the value of the channel if finished and all nodes have written.
+// Get returns the value (always nil) if finished and all values have been received.
 func (c *NamedBarrierValueAfterFinish) Get() (interface{}, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
-	if !c.finished {
+
+	if !c.finished || !c.namesMatchSeen() {
 		return nil, &errors.EmptyChannelError{}
 	}
-	
-	if len(c.values) == 0 {
-		return nil, &errors.EmptyChannelError{}
-	}
-	
-	// Check if all values are present
-	for name := range c.waitingFor {
-		if _, ok := c.values[name]; !ok {
-			return nil, &errors.EmptyChannelError{}
-		}
-	}
-	
-	return c.values, nil
+	return nil, nil
 }
 
-// IsAvailable returns true if finished and all nodes have written a value.
+// IsAvailable returns true if finished and all expected values have been received.
 func (c *NamedBarrierValueAfterFinish) IsAvailable() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
-	if !c.finished {
-		return false
-	}
-	
-	if len(c.values) == 0 {
-		return false
-	}
-	
-	for name := range c.waitingFor {
-		if _, ok := c.values[name]; !ok {
-			return false
-		}
-	}
-	
-	return true
+	return c.finished && c.namesMatchSeen()
 }
 
-// Update updates the channel with new values from nodes.
+// Update updates the channel with new values.
 func (c *NamedBarrierValueAfterFinish) Update(values []interface{}) (bool, error) {
 	if len(values) == 0 {
 		return false, nil
 	}
-	
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	updated := false
 	for _, val := range values {
-		// Check if this is a named value (tuple with node name and value)
-		if tuple, ok := val.([2]interface{}); ok && len(tuple) == 2 {
-			if name, ok := tuple[0].(string); ok {
-				if _, shouldWait := c.waitingFor[name]; shouldWait {
-					c.values[name] = tuple[1]
-					updated = true
-				}
+		name, ok := val.(string)
+		if !ok {
+			return false, &errors.InvalidUpdateError{
+				Message: fmt.Sprintf("value must be a string, got %T", val),
 			}
-		} else if tuple, ok := val.([]interface{}); ok && len(tuple) == 2 {
-			if name, ok := tuple[0].(string); ok {
-				if _, shouldWait := c.waitingFor[name]; shouldWait {
-					c.values[name] = tuple[1]
-					updated = true
-				}
+		}
+
+		if _, exists := c.names[name]; exists {
+			if !c.seen[name] {
+				c.seen[name] = true
+				updated = true
+			}
+		} else {
+			return false, &errors.InvalidUpdateError{
+				Message: fmt.Sprintf("value '%s' not in expected names %v", name, c.names),
 			}
 		}
 	}
-	
+
 	return updated, nil
 }
 
@@ -292,39 +262,40 @@ func (c *NamedBarrierValueAfterFinish) Update(values []interface{}) (bool, error
 func (c *NamedBarrierValueAfterFinish) Copy() Channel {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	newCh := NewNamedBarrierValueAfterFinish(c.Typ, nil)
 	newCh.Key = c.Key
+
+	// Copy names map
+	newCh.names = make(map[string]bool, len(c.names))
+	for k, v := range c.names {
+		newCh.names[k] = v
+	}
+
+	// Copy seen map
+	newCh.seen = make(map[string]bool, len(c.seen))
+	for k, v := range c.seen {
+		newCh.seen[k] = v
+	}
+
 	newCh.finished = c.finished
-	
-	// Copy waitingFor map
-	newCh.waitingFor = make(map[string]bool, len(c.waitingFor))
-	for k, v := range c.waitingFor {
-		newCh.waitingFor[k] = v
-	}
-	
-	// Copy values map
-	newCh.values = make(map[string]interface{}, len(c.values))
-	for k, v := range c.values {
-		newCh.values[k] = v
-	}
-	
+
 	return newCh
 }
 
-// Checkpoint returns the current values.
+// Checkpoint returns a tuple of (seen, finished).
 func (c *NamedBarrierValueAfterFinish) Checkpoint() interface{} {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
-	if len(c.values) == 0 {
+
+	if len(c.seen) == 0 && !c.finished {
 		return Missing
 	}
-	
-	// Return a copy of values
-	result := make(map[string]interface{}, len(c.values))
-	for k, v := range c.values {
-		result[k] = v
+
+	// Return as a map with both values
+	result := map[string]interface{}{
+		"seen":     c.seen,
+		"finished": c.finished,
 	}
 	return result
 }
@@ -333,46 +304,65 @@ func (c *NamedBarrierValueAfterFinish) Checkpoint() interface{} {
 func (c *NamedBarrierValueAfterFinish) FromCheckpoint(checkpoint interface{}) Channel {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	newCh := NewNamedBarrierValueAfterFinish(c.Typ, nil)
 	newCh.Key = c.Key
-	newCh.finished = c.finished
-	
-	if checkpoint == nil {
-		return newCh
-	}
-	
-	// Restore values from checkpoint
-	if cp, ok := checkpoint.(map[string]interface{}); ok {
-		newCh.values = make(map[string]interface{}, len(cp))
-		for k, v := range cp {
-			newCh.values[k] = v
+
+	if checkpoint != nil && !IsMissing(checkpoint) {
+		if cp, ok := checkpoint.(map[string]interface{}); ok {
+			if seen, ok := cp["seen"].(map[string]bool); ok {
+				newCh.seen = make(map[string]bool, len(seen))
+				for k, v := range seen {
+					newCh.seen[k] = v
+				}
+			}
+			if finished, ok := cp["finished"].(bool); ok {
+				newCh.finished = finished
+			}
 		}
 	}
-	
+
 	return newCh
 }
 
-// Finish marks the channel as finished.
+// Finish marks the channel as finished if all values have been received.
+// Returns true if the channel was marked as finished.
 func (c *NamedBarrierValueAfterFinish) Finish() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
-	// Remove nodes from waiting list
-	updated := len(c.waitingFor) > 0
-	c.waitingFor = make(map[string]bool)
-	
-	// If no more nodes to wait for, mark as finished
-	if !updated && len(c.waitingFor) == 0 {
+
+	if !c.finished && c.namesMatchSeen() {
 		c.finished = true
+		return true
 	}
-	
-	return updated
+	return false
 }
 
-// Consume always returns false for this channel.
+// Consume resets the channel after finish and all values have been received.
+// Returns true if the channel was consumed.
 func (c *NamedBarrierValueAfterFinish) Consume() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.finished && c.namesMatchSeen() && len(c.seen) > 0 {
+		c.finished = false
+		c.seen = make(map[string]bool)
+		return true
+	}
 	return false
+}
+
+// namesMatchSeen checks if all expected names have been seen.
+func (c *NamedBarrierValueAfterFinish) namesMatchSeen() bool {
+	if len(c.names) != len(c.seen) {
+		return false
+	}
+	for name := range c.names {
+		if !c.seen[name] {
+			return false
+		}
+	}
+	return true
 }
 
 // LastValueAfterFinish stores the last value received, but only makes it available after finish().
@@ -396,15 +386,15 @@ func NewLastValueAfterFinish(typ interface{}) *LastValueAfterFinish {
 func (c *LastValueAfterFinish) Get() (interface{}, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	if !c.finished {
 		return nil, &errors.EmptyChannelError{}
 	}
-	
+
 	if IsMissing(c.value) {
 		return nil, &errors.EmptyChannelError{}
 	}
-	
+
 	return c.value, nil
 }
 
@@ -420,17 +410,17 @@ func (c *LastValueAfterFinish) Update(values []interface{}) (bool, error) {
 	if len(values) == 0 {
 		return false, nil
 	}
-	
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	// Only accept one value per step
 	if len(values) > 1 {
 		return false, &errors.InvalidUpdateError{
 			Message: "Can receive only one value per step. Use a reducer to handle multiple values.",
 		}
 	}
-	
+
 	c.value = values[0]
 	return true, nil
 }
@@ -439,7 +429,7 @@ func (c *LastValueAfterFinish) Update(values []interface{}) (bool, error) {
 func (c *LastValueAfterFinish) Copy() Channel {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	newCh := NewLastValueAfterFinish(c.Typ)
 	newCh.Key = c.Key
 	newCh.value = c.value
@@ -458,14 +448,14 @@ func (c *LastValueAfterFinish) Checkpoint() interface{} {
 func (c *LastValueAfterFinish) FromCheckpoint(checkpoint interface{}) Channel {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	newCh := NewLastValueAfterFinish(c.Typ)
 	newCh.Key = c.Key
-	
+
 	if !IsMissing(checkpoint) {
 		newCh.value = checkpoint
 	}
-	
+
 	return newCh
 }
 
@@ -473,6 +463,7 @@ func (c *LastValueAfterFinish) FromCheckpoint(checkpoint interface{}) Channel {
 func (c *LastValueAfterFinish) Finish() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if !c.finished {
 		c.finished = true
 		return true

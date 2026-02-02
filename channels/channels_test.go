@@ -200,30 +200,43 @@ func TestNamedBarrierValue(t *testing.T) {
 	ch := NewNamedBarrierValue(nil, []string{"node_a", "node_b", "node_c"})
 	ch.SetKey("barrier")
 
-	// Initially not triggered
+	// Initially not available
 	if ch.IsAvailable() {
 		t.Error("Barrier should not be available initially")
 	}
 
 	// Add one node
-	ch.Update([]interface{}{"node_a"})
+	_, err := ch.Update([]interface{}{"node_a"})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
 	if ch.IsAvailable() {
 		t.Error("Barrier should not be available after one node")
 	}
 
 	// Add remaining nodes
-	ch.Update([]interface{}{"node_b", "node_c"})
+	_, err = ch.Update([]interface{}{"node_b", "node_c"})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
 	if !ch.IsAvailable() {
 		t.Error("Barrier should be available after all nodes")
 	}
 
-	val, _ := ch.Get()
-	if val != true {
-		t.Errorf("Expected true, got %v", val)
+	// Get should return nil when available
+	val, err := ch.Get()
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if val != nil {
+		t.Errorf("Expected nil, got %v", val)
 	}
 
 	// Consume should reset
-	ch.Consume()
+	consumed := ch.Consume()
+	if !consumed {
+		t.Error("Consume should return true")
+	}
 	if ch.IsAvailable() {
 		t.Error("Barrier should be reset after consume")
 	}
