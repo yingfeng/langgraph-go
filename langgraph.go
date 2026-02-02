@@ -1,0 +1,298 @@
+// Package langgraph is the main package for LangGraph Go.
+//
+// LangGraph is a library for building stateful, multi-agent applications with LLMs.
+// It provides a graph-based execution model that supports:
+//
+//   - Stateful computation with channels and reducers
+//   - Multi-agent workflows with subgraphs
+//   - Human-in-the-loop with interrupts
+//   - Persistence with checkpoints
+//   - Streaming and debugging
+//
+// Basic Usage:
+//
+//	import (
+//	    "context"
+//	    "github.com/langgraph-go/langgraph"
+//	    "github.com/langgraph-go/langgraph/channels"
+//	)
+//
+//	// Define state schema
+//	type State struct {
+//	    Messages []string
+//	    Counter  int
+//	}
+//
+//	// Create graph
+//	builder := langgraph.NewStateGraph(State{})
+//
+//	// Add nodes
+//	builder.AddNode("agent", func(ctx context.Context, state interface{}) (interface{}, error) {
+//	    s := state.(State)
+//	    s.Messages = append(s.Messages, "Hello from agent")
+//	    s.Counter++
+//	    return s, nil
+//	})
+//
+//	// Add edges
+//	builder.AddEdge("__start__", "agent")
+//	builder.AddEdge("agent", "__end__")
+//
+//	// Compile and run
+//	graph, err := builder.Compile()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	result, err := graph.Invoke(context.Background(), State{
+//	    Messages: []string{"Hello"},
+//	    Counter:  0,
+//	})
+//
+// For more examples and documentation, visit:
+// https://github.com/langgraph-go/langgraph
+package langgraph
+
+import (
+	"github.com/langgraph-go/langgraph/channels"
+	"github.com/langgraph-go/langgraph/checkpoint"
+	"github.com/langgraph-go/langgraph/constants"
+	"github.com/langgraph-go/langgraph/errors"
+	"github.com/langgraph-go/langgraph/graph"
+	"github.com/langgraph-go/langgraph/interrupt"
+
+	"github.com/langgraph-go/langgraph/types"
+)
+
+// Re-export main types for convenience.
+type (
+	// StateGraph is a graph whose nodes communicate by reading and writing to a shared state.
+	StateGraph = graph.StateGraph
+	
+	// CompiledGraph is a compiled, executable graph.
+	CompiledGraph = graph.CompiledGraph
+	
+	// Node represents a node in the graph.
+	Node = graph.Node
+	
+	// Edge represents an edge in the graph.
+	Edge = graph.Edge
+	
+	// Send represents a dynamic node invocation.
+	Send = graph.Send
+	
+	// Checkpointer is the interface for checkpoint savers.
+	Checkpointer = graph.Checkpointer
+	
+	// MemorySaver is an in-memory checkpoint saver.
+	MemorySaver = checkpoint.MemorySaver
+	
+	// SqliteSaver is a SQLite-based checkpoint saver.
+	SqliteSaver = checkpoint.SqliteSaver
+	
+	// Channel is the base interface for all channels.
+	Channel = channels.Channel
+	
+	// BaseChannel provides a base implementation of Channel.
+	BaseChannel = channels.BaseChannel
+	
+	// LastValue stores the last value received.
+	LastValue = channels.LastValue
+	
+	// Topic is a configurable PubSub Topic.
+	Topic = channels.Topic
+	
+	// BinaryOperatorAggregate stores the result of applying a binary operator.
+	BinaryOperatorAggregate = channels.BinaryOperatorAggregate
+	
+	// BinaryOperator is a function that combines two values into one.
+	BinaryOperator = channels.BinaryOperator
+	
+	// EphemeralValue stores a value that is cleared after being read once.
+	EphemeralValue = channels.EphemeralValue
+	
+	// NamedBarrierValue waits until all named nodes have written a value.
+	NamedBarrierValue = channels.NamedBarrierValue
+	
+	// NamedBarrierValueAfterFinish waits for all named nodes, available only after finish.
+	NamedBarrierValueAfterFinish = channels.NamedBarrierValueAfterFinish
+	
+	// LastValueAfterFinish stores last value, available only after finish.
+	LastValueAfterFinish = channels.LastValueAfterFinish
+	
+	// UntrackedValue stores a value but does not track it for checkpointing.
+	UntrackedValue = channels.UntrackedValue
+	
+	// AnyValue stores any value received.
+	AnyValue = channels.AnyValue
+	
+	// RunnableConfig is the configuration for a runnable.
+	RunnableConfig = types.RunnableConfig
+	
+	// StreamMode defines how the stream method should emit outputs.
+	StreamMode = types.StreamMode
+	
+	// RetryPolicy configures retrying nodes.
+	RetryPolicy = types.RetryPolicy
+	
+	// CachePolicy configures caching nodes.
+	CachePolicy = types.CachePolicy
+	
+	// Command is used to update the graph's state and send messages to nodes.
+	Command = types.Command
+	
+	// Interrupt represents information about an interrupt.
+	Interrupt = types.Interrupt
+	
+	// NodeFunc is the signature of a node function.
+	NodeFunc = types.NodeFunc
+	
+	// EdgeFunc is the signature of an edge/condition function.
+	EdgeFunc = types.EdgeFunc
+	
+	// StreamWriter writes data to the output stream.
+	StreamWriter = types.StreamWriter
+)
+
+// Re-export constants.
+const (
+	// Start is the first (virtual) node in the graph.
+	Start = constants.Start
+	
+	// End is the last (virtual) node in the graph.
+	End = constants.End
+	
+	// TagNoStream is a tag to disable streaming.
+	TagNoStream = constants.TagNoStream
+	
+	// TagHidden is a tag to hide a node/edge from tracing.
+	TagHidden = constants.TagHidden
+)
+
+// Re-export stream modes.
+const (
+	StreamModeValues      = types.StreamModeValues
+	StreamModeUpdates     = types.StreamModeUpdates
+	StreamModeCustom      = types.StreamModeCustom
+	StreamModeMessages    = types.StreamModeMessages
+	StreamModeCheckpoints = types.StreamModeCheckpoints
+	StreamModeTasks       = types.StreamModeTasks
+	StreamModeDebug       = types.StreamModeDebug
+)
+
+// Re-export error types.
+type (
+	GraphRecursionError   = errors.GraphRecursionError
+	InvalidUpdateError    = errors.InvalidUpdateError
+	GraphInterrupt        = errors.GraphInterrupt
+	EmptyChannelError     = errors.EmptyChannelError
+	EmptyInputError       = errors.EmptyInputError
+	NodeNotFoundError     = errors.NodeNotFoundError
+	InvalidNodeError      = errors.InvalidNodeError
+	InvalidEdgeError      = errors.InvalidEdgeError
+	ChannelNotFoundError  = errors.ChannelNotFoundError
+)
+
+// NewStateGraph creates a new StateGraph with the given state schema.
+func NewStateGraph(stateSchema interface{}) *StateGraph {
+	return graph.NewStateGraph(stateSchema)
+}
+
+// NewMemorySaver creates a new in-memory checkpoint saver.
+func NewMemorySaver() *MemorySaver {
+	return checkpoint.NewMemorySaver()
+}
+
+// NewSqliteSaver creates a new SQLite checkpoint saver.
+func NewSqliteSaver(dbPath string) (*SqliteSaver, error) {
+	return checkpoint.NewSqliteSaver(dbPath)
+}
+
+// Compile options.
+var (
+	// WithCheckpointer sets the checkpointer for the compiled graph.
+	WithCheckpointer = graph.WithCheckpointer
+	
+	// WithInterrupts sets the nodes that should trigger interrupts.
+	WithInterrupts = graph.WithInterrupts
+	
+	// WithRecursionLimit sets the recursion limit.
+	WithRecursionLimit = graph.WithRecursionLimit
+	
+	// WithDebug enables debug mode.
+	WithDebug = graph.WithDebug
+)
+
+// Interrupt functions.
+var (
+	// InterruptFunc interrupts the graph with a resumable exception.
+	InterruptFunc = interrupt.Interrupt
+	
+	// IsInterrupt checks if an error is a GraphInterrupt.
+	IsInterrupt = interrupt.IsInterrupt
+	
+	// GetInterruptValue extracts the interrupt value from a GraphInterrupt error.
+	GetInterruptValue = interrupt.GetInterruptValue
+)
+
+// Channel constructors.
+var (
+	// NewLastValue creates a new LastValue channel.
+	NewLastValue = channels.NewLastValue
+	
+	// NewTopic creates a new Topic channel.
+	NewTopic = channels.NewTopic
+	
+	// NewBinaryOperatorAggregate creates a new BinaryOperatorAggregate channel.
+	NewBinaryOperatorAggregate = channels.NewBinaryOperatorAggregate
+	
+	// NewEphemeralValue creates a new EphemeralValue channel.
+	NewEphemeralValue = channels.NewEphemeralValue
+	
+	// NewNamedBarrierValue creates a new NamedBarrierValue channel.
+	NewNamedBarrierValue = channels.NewNamedBarrierValue
+	
+	// NewNamedBarrierValueAfterFinish creates a new NamedBarrierValueAfterFinish channel.
+	NewNamedBarrierValueAfterFinish = channels.NewNamedBarrierValueAfterFinish
+	
+	// NewLastValueAfterFinish creates a new LastValueAfterFinish channel.
+	NewLastValueAfterFinish = channels.NewLastValueAfterFinish
+	
+	// NewUntrackedValue creates a new UntrackedValue channel.
+	NewUntrackedValue = channels.NewUntrackedValue
+	
+	// NewAnyValue creates a new AnyValue channel.
+	NewAnyValue = channels.NewAnyValue
+)
+
+// BinaryOperator functions.
+var (
+	// ListAppend appends two lists.
+	ListAppend = channels.ListAppend
+	
+	// IntAdd adds two integers.
+	IntAdd = channels.IntAdd
+	
+	// StringConcat concatenates two strings.
+	StringConcat = channels.StringConcat
+)
+
+// DefaultRetryPolicy returns a default retry policy.
+func DefaultRetryPolicy() RetryPolicy {
+	return types.DefaultRetryPolicy()
+}
+
+// NewRunnableConfig creates a new RunnableConfig.
+func NewRunnableConfig() *RunnableConfig {
+	return types.NewRunnableConfig()
+}
+
+// NewCommand creates a new Command.
+func NewCommand() *Command {
+	return types.NewCommand()
+}
+
+// NewSend creates a new Send.
+func NewSend(node string, arg interface{}) *Send {
+	return &Send{Node: node, Arg: arg}
+}
