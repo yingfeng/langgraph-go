@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/langgraph-go/langgraph/checkpoint"
 	"github.com/langgraph-go/langgraph/channels"
 	"github.com/langgraph-go/langgraph/errors"
 	"github.com/langgraph-go/langgraph/graph"
@@ -18,32 +19,45 @@ import (
 
 // Engine implements the Pregel execution model.
 type Engine struct {
-	graph          interface{} // StateGraph
-	checkpointer   graph.Checkpointer
-	interrupts     map[string]bool
-	recursionLimit int
-	debug          bool
-	config         *types.RunnableConfig
-	maxConcurrency int
-	retryPolicy    *types.RetryPolicy
+	graph             interface{} // StateGraph
+	checkpointer      graph.Checkpointer
+	interrupts        map[string]bool
+	recursionLimit    int
+	debug             bool
+	config            *types.RunnableConfig
+	maxConcurrency    int
+	retryPolicy       *types.RetryPolicy
+	currentCheckpoint *checkpoint.Checkpoint
+	channelVersions   map[string]int
+	versionsSeen      map[string]map[string]int
+	cache             Cache
+	backgroundExec    *BackgroundExecutor
 }
 
 // NewEngine creates a new Pregel engine.
 func NewEngine(graph interface{}, opts ...EngineOption) *Engine {
 	eng := &Engine{
-		graph:          graph,
-		interrupts:     make(map[string]bool),
-		recursionLimit: 25,
-		debug:          false,
-		config:         types.NewRunnableConfig(),
-		maxConcurrency: 10,
-		retryPolicy:    nil,
+		graph:           graph,
+		interrupts:      make(map[string]bool),
+		recursionLimit:  25,
+		debug:           false,
+		config:          types.NewRunnableConfig(),
+		maxConcurrency:  10,
+		retryPolicy:     nil,
+		channelVersions: make(map[string]int),
+		versionsSeen:    make(map[string]map[string]int),
+		cache:           &NoopCache{},
 	}
-	
+
 	for _, opt := range opts {
 		opt(eng)
 	}
-	
+
+	// Initialize background executor if not already set
+	if eng.backgroundExec == nil {
+		eng.backgroundExec = NewBackgroundExecutor(eng.maxConcurrency, 100)
+	}
+
 	return eng
 }
 
@@ -103,6 +117,20 @@ func WithRetryPolicy(policy *types.RetryPolicy) EngineOption {
 	}
 }
 
+// WithCache sets the cache for the engine.
+func WithCache(cache Cache) EngineOption {
+	return func(e *Engine) {
+		e.cache = cache
+	}
+}
+
+// WithBackgroundExecutor sets the background executor for the engine.
+func WithBackgroundExecutor(exec *BackgroundExecutor) EngineOption {
+	return func(e *Engine) {
+		e.backgroundExec = exec
+	}
+}
+
 // ExecuteResult represents the result of graph execution.
 type ExecuteResult struct {
 	// Final state of the graph.
@@ -158,18 +186,33 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 		
 		// Get thread ID for checkpointing
 		threadID := e.getThreadID()
-		
-		// Load checkpoint if available
+
+		// Initialize or load checkpoint
 		if e.checkpointer != nil {
-			checkpoint, err := e.checkpointer.Get(ctx, map[string]interface{}{
+			cpData, err := e.checkpointer.Get(ctx, map[string]interface{}{
 				"thread_id": threadID,
 			})
-			if err == nil && checkpoint != nil {
-				if err := channelRegistry.RestoreFromCheckpoint(checkpoint); err != nil {
+			if err == nil && cpData != nil {
+				if err := channelRegistry.RestoreFromCheckpoint(cpData); err != nil {
 					errCh <- fmt.Errorf("failed to restore from checkpoint: %w", err)
 					return
 				}
+				// Load checkpoint object
+				if cp, err := checkpoint.FromMap(cpData); err == nil {
+					e.currentCheckpoint = cp
+				}
 			}
+		}
+
+		// Initialize new checkpoint if none exists
+		if e.currentCheckpoint == nil {
+			e.currentCheckpoint = checkpoint.NewCheckpoint(threadID, 0)
+		}
+
+		// Start background executor
+		if e.backgroundExec != nil {
+			e.backgroundExec.Start(ctx)
+			defer e.backgroundExec.Stop()
 		}
 		
 		// Execute Pregel loop
@@ -388,57 +431,130 @@ func (e *Engine) shouldInterrupt(
 	return interrupted
 }
 
-// applyWrites applies task outputs to channels.
+// applyWrites applies task outputs to channels with version management and write merging.
 func (e *Engine) applyWrites(
 	registry *channels.Registry,
 	results []*TaskResult,
 	triggerToNodes map[string]struct{},
 ) (map[string]struct{}, error) {
 	updatedChannels := make(map[string]struct{})
-	
+
 	// Sort results for deterministic order
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Name < results[j].Name
 	})
-	
-	// Group writes by channel
+
+	// Group writes by channel with write merging
 	writesByChannel := make(map[string][]interface{})
+	pendingWrites := make(map[string]*checkpoint.PendingWrite)
+
 	for _, result := range results {
 		if result.Err != nil {
 			continue
 		}
-		
+
 		// Convert output to map of writes
 		outputMap, err := toMap(result.Output)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert output to map: %w", err)
 		}
-		
+
 		for key, value := range outputMap {
+			// Skip nil values
+			if value == nil {
+				continue
+			}
+
 			// Check for Overwrite wrapper
+			overwrite := false
 			if ow, ok := value.(*types.Overwrite); ok {
 				value = ow.Value
+				overwrite = true
 			}
-			
+
 			// Add to writes
 			writesByChannel[key] = append(writesByChannel[key], value)
+
+			// Track pending write
+			pendingWrites[key] = &checkpoint.PendingWrite{
+				Channel:   key,
+				Value:     value,
+				Overwrite: overwrite,
+				Node:      result.Name,
+			}
 		}
 	}
-	
-	// Apply writes to channels
+
+	// Apply writes to channels with version management
 	for channelName, values := range writesByChannel {
 		if ch, ok := registry.Get(channelName); ok {
-			updated, err := ch.Update(values)
+			// Filter out nil values
+			filtered := make([]interface{}, 0, len(values))
+			for _, v := range values {
+				if v != nil {
+					filtered = append(filtered, v)
+				}
+			}
+
+			// Update channel
+			updated, err := ch.Update(filtered)
 			if err != nil {
 				return nil, fmt.Errorf("failed to update channel %s: %w", channelName, err)
 			}
+
 			if updated && ch.IsAvailable() {
 				updatedChannels[channelName] = struct{}{}
+
+				// Increment channel version
+				e.channelVersions[channelName]++
+
+				// Update checkpoint if available
+				if e.currentCheckpoint != nil {
+					e.currentCheckpoint.IncrementChannel(channelName)
+				}
 			}
 		}
 	}
-	
+
+	// Store pending writes to checkpoint
+	if e.currentCheckpoint != nil {
+		for _, pw := range pendingWrites {
+			e.currentCheckpoint.AddPendingWrite(pw.Channel, pw.Value, pw.Overwrite, pw.Node)
+		}
+	}
+
+	// Mark channels as seen by nodes
+	for resultName := range writesByChannel {
+		if _, ok := triggerToNodes[resultName]; ok {
+			for channelName := range updatedChannels {
+				e.markSeen(resultName, channelName)
+			}
+		}
+	}
+
 	return updatedChannels, nil
+}
+
+// markSeen marks that a node has seen a channel's version.
+func (e *Engine) markSeen(node, channel string) {
+	if e.versionsSeen[node] == nil {
+		e.versionsSeen[node] = make(map[string]int)
+	}
+	e.versionsSeen[node][channel] = e.channelVersions[channel]
+
+	if e.currentCheckpoint != nil {
+		e.currentCheckpoint.MarkSeen(node, channel)
+	}
+}
+
+// hasSeen checks if a node has seen a channel's current version.
+func (e *Engine) hasSeen(node, channel string) bool {
+	if versions, ok := e.versionsSeen[node]; ok {
+		if version, ok := versions[channel]; ok {
+			return version == e.channelVersions[channel]
+		}
+	}
+	return false
 }
 
 // executeTasks executes the given tasks concurrently.
