@@ -123,6 +123,11 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// List returns all channel names (alias for Names).
+func (r *Registry) List() []string {
+	return r.Names()
+}
+
 // CreateCheckpoint creates a checkpoint for all channels.
 func (r *Registry) CreateCheckpoint() map[string]interface{} {
 	checkpoint := make(map[string]interface{})

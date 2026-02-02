@@ -20,16 +20,11 @@ BUILD_FLAGS=-v
 
 # Build the project
 build:
-	go build ./...
+	$(GOBUILD) $(BUILD_FLAGS) ./...
 
 # Run all tests
 test:
 	go test -v ./...
-
-# Run tests with coverage
-coverage:
-	go test -v -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
 
 # Format code
 fmt:
