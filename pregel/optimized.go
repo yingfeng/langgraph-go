@@ -28,6 +28,7 @@ type PregelOptimizedEngine struct {
 	readyChannels     map[string]bool
 	finishedTasks     map[string]bool
 	taskDependencies  map[string][]string
+	channelVersions   map[string]int
 	mu                sync.RWMutex
 }
 
@@ -58,6 +59,7 @@ func NewPregelOptimizedEngine(baseEngine *Engine, config *OptimizedEngineConfig)
 		readyChannels:     make(map[string]bool),
 		finishedTasks:     make(map[string]bool),
 		taskDependencies:  make(map[string][]string),
+		channelVersions:   make(map[string]int),
 	}
 }
 

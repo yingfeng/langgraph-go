@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/langgraph-go/langgraph/channels"
 	"github.com/langgraph-go/langgraph/types"
 )
 
@@ -347,15 +348,18 @@ func TestOptimizedApplyWrites(t *testing.T) {
 	t.Run("apply writes with bump_step", func(t *testing.T) {
 		ctx := context.Background()
 		
-		// This would require proper registry setup
-		// For now, test that the function exists
+		// Create a registry with a channel
+		registry := channels.NewRegistry()
+		ch := channels.NewAnyValue(nil)
+		registry.Register("key", ch)
+		
 		results := []*TaskResult{
 			{Name: "task1", Output: map[string]interface{}{"key": "value"}},
 		}
 		
 		updatedChannels, err := optimized.OptimizedApplyWrites(
 			ctx,
-			nil, // registry
+			registry,
 			results,
 			1,
 			map[string]struct{}{"trigger": {}},
