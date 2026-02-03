@@ -1,4 +1,4 @@
-module github.com/langgraph-go/langgraph
+module github.com/infiniflow/ragflow/agent
 
 go 1.24.0
 

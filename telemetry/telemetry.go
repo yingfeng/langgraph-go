@@ -15,7 +15,7 @@ import (
 
 const (
 	// InstrumentationName is the name of the instrumentation.
-	InstrumentationName = "github.com/langgraph-go/langgraph"
+	InstrumentationName = "github.com/infiniflow/ragflow/agent"
 	// InstrumentationVersion is the version of the instrumentation.
 	InstrumentationVersion = "1.0.0"
 )

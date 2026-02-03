@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // NamedBarrierValue waits until all specified named values are received before making the value available.

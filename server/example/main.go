@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/graph"
-	"github.com/langgraph-go/langgraph/server"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/graph"
+	"github.com/infiniflow/ragflow/agent/server"
 )
 
 // SimpleState is a simple state for the example

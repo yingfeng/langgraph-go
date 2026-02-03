@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/langgraph-go/langgraph/channels"
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/errors"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/channels"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/errors"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // pregelEngine implements the Pregel execution model.

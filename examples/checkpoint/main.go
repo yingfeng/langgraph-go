@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/langgraph-go/langgraph"
+	"github.com/infiniflow/ragflow/agent"
 )
 
 // State defines the graph state.

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/langgraph-go/langgraph/constants"
+	"github.com/infiniflow/ragflow/agent/constants"
 )
 
 // DrawFormat represents the output format for graph visualization.

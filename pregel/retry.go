@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // RetryExecutor handles node execution with sophisticated retry logic.

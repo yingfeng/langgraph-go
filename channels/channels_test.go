@@ -3,7 +3,7 @@ package channels
 import (
 	"testing"
 
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 func TestLastValue(t *testing.T) {

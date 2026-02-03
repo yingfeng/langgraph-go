@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/langgraph-go/langgraph/telemetry"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/telemetry"
+	"github.com/infiniflow/ragflow/agent/types"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"

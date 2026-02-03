@@ -1,7 +1,7 @@
 package channels
 
 import (
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // UntrackedValue stores a value but does not track it for checkpointing.

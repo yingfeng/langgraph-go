@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // Validator validates graph structure.

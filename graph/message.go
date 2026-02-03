@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/langgraph-go/langgraph/channels"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/channels"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // Message represents a message in the conversation.

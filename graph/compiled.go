@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // CompiledStateGraph represents a compiled state graph with full subgraph support.

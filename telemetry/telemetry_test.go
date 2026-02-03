@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/langgraph-go/langgraph/runnable"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/runnable"
+	"github.com/infiniflow/ragflow/agent/types"
 	"go.opentelemetry.io/otel/trace"
 )
 

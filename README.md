@@ -1,7 +1,7 @@
 # LangGraph Go
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/langgraph-go/langgraph.svg)](https://pkg.go.dev/github.com/langgraph-go/langgraph)
-[![Go Report Card](https://goreportcard.com/badge/github.com/langgraph-go/langgraph)](https://goreportcard.com/report/github.com/langgraph-go/langgraph)
+[![Go Reference](https://pkg.go.dev/badge/github.com/infiniflow/ragflow/agent.svg)](https://pkg.go.dev/github.com/infiniflow/ragflow/agent)
+[![Go Report Card](https://goreportcard.com/badge/github.com/infiniflow/ragflow/agent)](https://goreportcard.com/report/github.com/infiniflow/ragflow/agent)
 
 LangGraph Go is a Go port of [LangGraph](https://github.com/langchain-ai/langgraph), a library for building stateful, multi-agent applications with LLMs. It provides a graph-based execution model that supports cycles, branching, persistence, and human-in-the-loop workflows.
 
@@ -18,7 +18,7 @@ LangGraph Go is a Go port of [LangGraph](https://github.com/langchain-ai/langgra
 ## Installation
 
 ```bash
-go get github.com/langgraph-go/langgraph
+go get github.com/infiniflow/ragflow/agent
 ```
 
 ## Quick Start
@@ -31,7 +31,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/langgraph-go/langgraph"
+    "github.com/infiniflow/ragflow/agent"
 )
 
 // Define your state
@@ -230,7 +230,7 @@ LangGraph Go provides comprehensive OpenTelemetry support for distributed tracin
 ### Basic Setup
 
 ```go
-import "github.com/langgraph-go/langgraph/telemetry"
+import "github.com/infiniflow/ragflow/agent/telemetry"
 
 // Initialize for development
 shutdown, err := telemetry.InitForDevelopment("my-app")

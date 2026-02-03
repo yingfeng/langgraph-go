@@ -6,7 +6,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/langgraph-go/langgraph/stream"
+	"github.com/infiniflow/ragflow/agent/stream"
 )
 
 // StreamMessagesHandler handles streaming of messages from LLM nodes.

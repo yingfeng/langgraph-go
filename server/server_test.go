@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/graph"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/graph"
 )
 
 // SimpleState is a simple state for testing

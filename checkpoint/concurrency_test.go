@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 func TestNewCheckpointTuple(t *testing.T) {

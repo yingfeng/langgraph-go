@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/langgraph-go/langgraph/runnable"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/runnable"
+	"github.com/infiniflow/ragflow/agent/types"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"

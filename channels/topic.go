@@ -1,7 +1,7 @@
 package channels
 
 import (
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // Topic is a configurable PubSub Topic.

@@ -31,7 +31,7 @@ import (
     "context"
     "log"
     
-    "github.com/langgraph-go/langgraph/telemetry"
+    "github.com/infiniflow/ragflow/agent/telemetry"
 )
 
 func main() {
@@ -79,8 +79,8 @@ defer shutdown(context.Background())
 
 ```go
 import (
-    "github.com/langgraph-go/langgraph/runnable"
-    "github.com/langgraph-go/langgraph/telemetry"
+    "github.com/infiniflow/ragflow/agent/runnable"
+    "github.com/infiniflow/ragflow/agent/telemetry"
 )
 
 // Create a telemetry provider
@@ -134,7 +134,7 @@ result, err := tracedNode(ctx, input)
 ### Adding Configuration Context
 
 ```go
-import "github.com/langgraph-go/langgraph/types"
+import "github.com/infiniflow/ragflow/agent/types"
 
 // Create configuration
 config := &types.RunnableConfig{

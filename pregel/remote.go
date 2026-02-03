@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // RemoteRunnable executes nodes remotely via HTTP.

@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/langgraph-go/langgraph/channels"
-	"github.com/langgraph-go/langgraph/checkpoint"
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/channels"
+	"github.com/infiniflow/ragflow/agent/checkpoint"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 func TestSubgraphManagerCreation(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/langgraph-go/langgraph/constants"
+	"github.com/infiniflow/ragflow/agent/constants"
 )
 
 func TestDrawMermaid(t *testing.T) {

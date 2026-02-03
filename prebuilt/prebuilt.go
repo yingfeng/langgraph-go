@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/langgraph-go/langgraph/runnable"
+	"github.com/infiniflow/ragflow/agent/runnable"
 )
 
 // ReactAgentConfig holds configuration for a ReAct agent.

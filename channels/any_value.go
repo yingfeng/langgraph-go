@@ -1,7 +1,7 @@
 package channels
 
 import (
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // AnyValue stores any value received, overwriting the previous value.

@@ -13,8 +13,8 @@
 //
 //	import (
 //	    "context"
-//	    "github.com/langgraph-go/langgraph"
-//	    "github.com/langgraph-go/langgraph/channels"
+//	    "github.com/infiniflow/ragflow/agent"
+//	    "github.com/infiniflow/ragflow/agent/channels"
 //	)
 //
 //	// Define state schema
@@ -50,18 +50,18 @@
 //	})
 //
 // For more examples and documentation, visit:
-// https://github.com/langgraph-go/langgraph
+// https://github.com/infiniflow/ragflow/agent
 package langgraph
 
 import (
-	"github.com/langgraph-go/langgraph/channels"
-	"github.com/langgraph-go/langgraph/checkpoint"
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/errors"
-	"github.com/langgraph-go/langgraph/graph"
-	"github.com/langgraph-go/langgraph/interrupt"
-	"github.com/langgraph-go/langgraph/prebuilt"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/channels"
+	"github.com/infiniflow/ragflow/agent/checkpoint"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/errors"
+	"github.com/infiniflow/ragflow/agent/graph"
+	"github.com/infiniflow/ragflow/agent/interrupt"
+	"github.com/infiniflow/ragflow/agent/prebuilt"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // Re-export main types for convenience.

@@ -1,7 +1,7 @@
 package channels
 
 import (
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // EphemeralValue stores a value that is cleared after being read once.

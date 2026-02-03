@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/langgraph-go/langgraph/channels"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/channels"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // ChannelWrite represents a write operation to channels.

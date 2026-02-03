@@ -14,7 +14,7 @@ A LangGraph API server implementation for Go that is compatible with the Python 
 ## Installation
 
 ```bash
-go get github.com/langgraph-go/langgraph/server
+go get github.com/infiniflow/ragflow/agent/server
 ```
 
 ## Quick Start
@@ -26,9 +26,9 @@ import (
     "context"
     "log"
 
-    "github.com/langgraph-go/langgraph/constants"
-    "github.com/langgraph-go/langgraph/graph"
-    "github.com/langgraph-go/langgraph/server"
+    "github.com/infiniflow/ragflow/agent/constants"
+    "github.com/infiniflow/ragflow/agent/graph"
+    "github.com/infiniflow/ragflow/agent/server"
 )
 
 // Define your state

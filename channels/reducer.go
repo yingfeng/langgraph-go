@@ -3,7 +3,7 @@ package channels
 import (
 	"reflect"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // ReducerChannel wraps a channel with a reducer function.

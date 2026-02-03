@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/langgraph-go/langgraph/managed"
+	"github.com/infiniflow/ragflow/agent/managed"
 )
 
 // TestRuntimeMultiTenantContext tests multi-tenant runtime contexts.

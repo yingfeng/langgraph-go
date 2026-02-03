@@ -3,7 +3,7 @@ package channels
 import (
 	"fmt"
 
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // LastValue stores the last value received, can receive at most one value per step.

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // InjectionContext holds the context for dependency injection.

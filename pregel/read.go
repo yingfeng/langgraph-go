@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/langgraph-go/langgraph/channels"
+	"github.com/infiniflow/ragflow/agent/channels"
 )
 
 // ChannelRead represents a read operation from channels.

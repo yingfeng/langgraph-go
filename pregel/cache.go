@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // Cache is the interface for caching node outputs.

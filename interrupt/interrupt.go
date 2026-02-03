@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/langgraph-go/langgraph/errors"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/errors"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // contextKey is the key for interrupt context in context.Context.

@@ -4,7 +4,7 @@ package channels
 import (
 	"fmt"
 
-	"github.com/langgraph-go/langgraph/errors"
+	"github.com/infiniflow/ragflow/agent/errors"
 )
 
 // Missing is a sentinel value to indicate a missing value.

@@ -5,10 +5,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/langgraph-go/langgraph/channels"
-	"github.com/langgraph-go/langgraph/constants"
-	"github.com/langgraph-go/langgraph/errors"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/channels"
+	"github.com/infiniflow/ragflow/agent/constants"
+	"github.com/infiniflow/ragflow/agent/errors"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // Node represents a node in the graph.

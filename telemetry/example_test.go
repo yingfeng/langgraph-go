@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/langgraph-go/langgraph/runnable"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/runnable"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // Example_init demonstrates basic initialization of OpenTelemetry.

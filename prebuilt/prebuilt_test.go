@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/langgraph-go/langgraph/runnable"
+	"github.com/infiniflow/ragflow/agent/runnable"
 )
 
 func TestToolNode(t *testing.T) {

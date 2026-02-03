@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // MultiPolicyRetryExecutor handles node execution with multiple retry policies.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/langgraph-go/langgraph"
-	"github.com/langgraph-go/langgraph/channels"
+	"github.com/infiniflow/ragflow/agent"
+	"github.com/infiniflow/ragflow/agent/channels"
 )
 
 func main() {

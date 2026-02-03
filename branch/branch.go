@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/langgraph-go/langgraph/errors"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/errors"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // BranchSpec represents a conditional branch specification.

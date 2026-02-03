@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 func TestMemoryCache(t *testing.T) {

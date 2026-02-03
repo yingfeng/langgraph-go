@@ -7,10 +7,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/langgraph-go/langgraph/pregel"
-	"github.com/langgraph-go/langgraph/telemetry"
-	"github.com/langgraph-go/langgraph/runnable"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/pregel"
+	"github.com/infiniflow/ragflow/agent/telemetry"
+	"github.com/infiniflow/ragflow/agent/runnable"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 func main() {

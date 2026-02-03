@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // StreamEventType represents the type of stream event.

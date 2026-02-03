@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/langgraph-go/langgraph/channels"
+	"github.com/infiniflow/ragflow/agent/channels"
 )
 
 // OptimizedEngineConfig configures the optimized Pregel engine.

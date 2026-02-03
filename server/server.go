@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/langgraph-go/langgraph/checkpoint"
-	"github.com/langgraph-go/langgraph/graph"
-	"github.com/langgraph-go/langgraph/types"
+	"github.com/infiniflow/ragflow/agent/checkpoint"
+	"github.com/infiniflow/ragflow/agent/graph"
+	"github.com/infiniflow/ragflow/agent/types"
 )
 
 // Server implements the LangGraph API server compatible with langgraph-sdk.

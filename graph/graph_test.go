@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/langgraph-go/langgraph/constants"
+	"github.com/infiniflow/ragflow/agent/constants"
 )
 
 // State type for testing
