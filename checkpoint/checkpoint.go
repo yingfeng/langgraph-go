@@ -415,6 +415,27 @@ func NewPutWrites(config *types.RunnableConfig, writes []PendingWrite, taskID st
 	}
 }
 
+// CheckpointListFilter represents filter criteria for listing checkpoints.
+type CheckpointListFilter struct {
+	ThreadID string
+	Limit    int
+}
+
+// CheckpointListResponse represents a checkpoint in list results.
+type CheckpointListResponse struct {
+	ID         string
+	ThreadID   string
+	Version    int
+	CreatedAt  time.Time
+	Metadata   map[string]interface{}
+}
+
+// LineageEntry represents an entry in a checkpoint lineage.
+type LineageEntry struct {
+	Checkpoint *Checkpoint
+	Metadata   map[string]interface{}
+}
+
 // VersionConflictError is raised when there is a version conflict.
 type VersionConflictError struct {
 	CurrentVersion int

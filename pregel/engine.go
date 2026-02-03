@@ -807,6 +807,7 @@ type Task struct {
 	Name       string
 	Func       types.NodeFunc
 	Channels   []string
+	Path       []string
 	Triggers   map[string]struct{}
 	RetryPolicy *types.RetryPolicy
 }
