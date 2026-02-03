@@ -83,7 +83,7 @@ type ListNamespacesOp struct {
 
 // Result represents the result of an operation.
 type Result struct {
-	Value map[string]interface{}
+	Value interface{}
 	Error error
 }
 

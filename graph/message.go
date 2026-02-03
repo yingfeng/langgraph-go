@@ -73,6 +73,7 @@ func (s *MessagesState) GetMessagesByRole(role string) []*Message {
 }
 
 // AddMessagesReducer is a reducer function that adds messages to the state.
+// It performs deduplication based on message ID.
 func AddMessagesReducer(existing interface{}, updates interface{}) (interface{}, error) {
 	msgs, ok := updates.([]*Message)
 	if !ok {
@@ -93,10 +94,53 @@ func AddMessagesReducer(existing interface{}, updates interface{}) (interface{},
 		return nil, &GraphError{Message: fmt.Sprintf("existing messages is not []*Message, got %T", existing)}
 	}
 
-	// Append messages
-	result := make([]*Message, len(existingMsgs)+len(msgs))
-	copy(result, existingMsgs)
-	copy(result[len(existingMsgs):], msgs)
+	// Create a map of existing messages by ID for quick lookup
+	existingMap := make(map[string]*Message)
+	for _, msg := range existingMsgs {
+		if msg.ID != "" {
+			existingMap[msg.ID] = msg
+		}
+	}
+
+	// Process updates: update existing messages with same ID, append new ones
+	result := make([]*Message, 0, len(existingMsgs)+len(msgs))
+	// Keep track of which IDs have been processed
+	processedIDs := make(map[string]bool)
+	
+	// First, add all existing messages, updating those that have updates
+	for _, msg := range existingMsgs {
+		if msg.ID == "" {
+			// Messages without ID are always kept as-is
+			result = append(result, msg)
+			continue
+		}
+		// Check if there's an update for this ID
+		var updated *Message
+		for _, update := range msgs {
+			if update.ID == msg.ID {
+				updated = update
+				break
+			}
+		}
+		if updated != nil {
+			result = append(result, updated)
+			processedIDs[msg.ID] = true
+		} else {
+			result = append(result, msg)
+		}
+	}
+	
+	// Then, append new messages that don't have matching IDs in existing
+	for _, msg := range msgs {
+		if msg.ID == "" {
+			// Messages without ID are always appended
+			result = append(result, msg)
+		} else if !processedIDs[msg.ID] && existingMap[msg.ID] == nil {
+			// This is a new message with an ID not in existing
+			result = append(result, msg)
+		}
+	}
+
 	return result, nil
 }
 
@@ -404,4 +448,52 @@ func (e *GraphError) Error() string {
 		return e.Code + ": " + e.Message
 	}
 	return e.Message
+}
+
+// OpenAI format conversion utilities
+
+// OpenAIChatMessage represents a message in OpenAI's chat completion API format.
+type OpenAIChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Name    string `json:"name,omitempty"`
+	// Additional fields like function_call, tool_calls can be added as needed
+}
+
+// ToOpenAIChatMessage converts a Message to OpenAI chat message format.
+func (m *Message) ToOpenAIChatMessage() *OpenAIChatMessage {
+	return &OpenAIChatMessage{
+		Role:    m.Role,
+		Content: m.Content,
+		// Name can be extracted from Extra if needed
+	}
+}
+
+// MessagesToOpenAIFormat converts a slice of Messages to OpenAI chat completion format.
+func MessagesToOpenAIFormat(messages []*Message) []OpenAIChatMessage {
+	result := make([]OpenAIChatMessage, len(messages))
+	for i, msg := range messages {
+		result[i] = OpenAIChatMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+	return result
+}
+
+// OpenAIFormatToMessages converts OpenAI format messages back to Messages.
+func OpenAIFormatToMessages(openaiMessages []OpenAIChatMessage) []*Message {
+	result := make([]*Message, len(openaiMessages))
+	for i, msg := range openaiMessages {
+		result[i] = &Message{
+			ID:      "", // ID will need to be generated or preserved separately
+			Role:    msg.Role,
+			Content: msg.Content,
+			Extra:   make(map[string]interface{}),
+		}
+		if msg.Name != "" {
+			result[i].Extra["name"] = msg.Name
+		}
+	}
+	return result
 }
