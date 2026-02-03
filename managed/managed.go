@@ -474,6 +474,7 @@ const (
 )
 
 // Runtime provides runtime information for graph execution.
+// This corresponds to Python's Runtime class in runtime.py
 type Runtime struct {
 	// TaskID is the ID of the current task.
 	TaskID string
@@ -485,28 +486,129 @@ type Runtime struct {
 	Configurable map[string]interface{}
 	// CheckpointNS is the checkpoint namespace.
 	CheckpointNS string
+	// Context is the static context for the graph run, like user_id, db_conn, etc.
+	// This is used for multi-tenant support.
+	Context interface{}
+	// Store is the BaseStore for long-term storage, enabling persistence and memory.
+	Store interface{}
+	// StreamWriter is the function that writes to the custom stream.
+	StreamWriter func(interface{})
+	// Previous is the previous return value for the given thread.
+	Previous interface{}
 }
 
 // NewRuntime creates a new runtime.
 func NewRuntime() *Runtime {
 	return &Runtime{
-		TaskID:      "",
+		TaskID:       "",
 		NodeName:     "",
 		Step:         0,
-		Configurable:  make(map[string]interface{}),
+		Configurable: make(map[string]interface{}),
 		CheckpointNS: "",
+		Context:      nil,
+		Store:        nil,
+		StreamWriter: nil,
+		Previous:     nil,
 	}
 }
 
 // Clone creates a copy of the runtime.
 func (r *Runtime) Clone() *Runtime {
 	return &Runtime{
-		TaskID:      r.TaskID,
+		TaskID:       r.TaskID,
 		NodeName:     r.NodeName,
 		Step:         r.Step,
-		Configurable:  cloneMap(r.Configurable),
+		Configurable: cloneMap(r.Configurable),
 		CheckpointNS: r.CheckpointNS,
+		Context:      r.Context,
+		Store:        r.Store,
+		StreamWriter: r.StreamWriter,
+		Previous:     r.Previous,
 	}
+}
+
+// Merge merges two runtimes together.
+// If a value is not provided in the other runtime, the value from the current runtime is used.
+func (r *Runtime) Merge(other *Runtime) *Runtime {
+	if other == nil {
+		return r.Clone()
+	}
+
+	merged := r.Clone()
+
+	if other.Context != nil {
+		merged.Context = other.Context
+	}
+	if other.Store != nil {
+		merged.Store = other.Store
+	}
+	if other.StreamWriter != nil {
+		merged.StreamWriter = other.StreamWriter
+	}
+	if other.Previous != nil {
+		merged.Previous = other.Previous
+	}
+	if other.TaskID != "" {
+		merged.TaskID = other.TaskID
+	}
+	if other.NodeName != "" {
+		merged.NodeName = other.NodeName
+	}
+	if other.Step != 0 {
+		merged.Step = other.Step
+	}
+	if other.CheckpointNS != "" {
+		merged.CheckpointNS = other.CheckpointNS
+	}
+
+	// Merge configurable
+	for k, v := range other.Configurable {
+		merged.Configurable[k] = v
+	}
+
+	return merged
+}
+
+// Override creates a new runtime with the given overrides.
+func (r *Runtime) Override(overrides map[string]interface{}) *Runtime {
+	newRuntime := r.Clone()
+
+	if context, ok := overrides["context"]; ok {
+		newRuntime.Context = context
+	}
+	if store, ok := overrides["store"]; ok {
+		newRuntime.Store = store
+	}
+	if streamWriter, ok := overrides["stream_writer"]; ok {
+		if sw, ok := streamWriter.(func(interface{})); ok {
+			newRuntime.StreamWriter = sw
+		}
+	}
+	if previous, ok := overrides["previous"]; ok {
+		newRuntime.Previous = previous
+	}
+	if taskID, ok := overrides["task_id"]; ok {
+		if tid, ok := taskID.(string); ok {
+			newRuntime.TaskID = tid
+		}
+	}
+	if nodeName, ok := overrides["node_name"]; ok {
+		if nn, ok := nodeName.(string); ok {
+			newRuntime.NodeName = nn
+		}
+	}
+	if step, ok := overrides["step"]; ok {
+		if s, ok := step.(int); ok {
+			newRuntime.Step = s
+		}
+	}
+	if checkpointNS, ok := overrides["checkpoint_ns"]; ok {
+		if ns, ok := checkpointNS.(string); ok {
+			newRuntime.CheckpointNS = ns
+		}
+	}
+
+	return newRuntime
 }
 
 func cloneMap(m map[string]interface{}) map[string]interface{} {
@@ -518,6 +620,32 @@ func cloneMap(m map[string]interface{}) map[string]interface{} {
 		clone[k] = v
 	}
 	return clone
+}
+
+// DEFAULT_RUNTIME is the default runtime instance with nil values.
+// This corresponds to Python's DEFAULT_RUNTIME in runtime.py
+var DEFAULT_RUNTIME = &Runtime{
+	TaskID:       "",
+	NodeName:     "",
+	Step:         0,
+	Configurable: make(map[string]interface{}),
+	CheckpointNS: "",
+	Context:      nil,
+	Store:        nil,
+	StreamWriter: nil,
+	Previous:     nil,
+}
+
+// get_runtime returns the runtime for the current graph run.
+// This corresponds to Python's get_runtime() function in runtime.py
+func get_runtime(config map[string]interface{}) *Runtime {
+	if config == nil {
+		return DEFAULT_RUNTIME.Clone()
+	}
+	if runtime, ok := config[ConfigKeyRuntime].(*Runtime); ok {
+		return runtime
+	}
+	return DEFAULT_RUNTIME.Clone()
 }
 
 // GetTaskID returns the task ID from config.

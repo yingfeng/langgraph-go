@@ -1,11 +1,11 @@
-// Package pregel provides WebSocket-based remote execution support for Pregel.
+// Package pregel provides WebSocket support for remote graph execution.
 package pregel
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
+	"net/http"
 	"sync"
 	"time"
 
@@ -14,520 +14,341 @@ import (
 )
 
 // WebSocketPregelProtocol implements PregelProtocol over WebSocket.
+// This provides bidirectional streaming communication for remote graph execution.
 type WebSocketPregelProtocol struct {
-	conn           *websocket.Conn
-	mu             sync.Mutex
-	sendCh         chan *PregelMessage
-	receiveCh       chan *PregelMessage
-	closeCh         chan struct{}
+	conn            *websocket.Conn
 	url             string
-	headers         map[string]string
+	headers         http.Header
+	mu              sync.RWMutex
+	messageChan     chan *PregelMessage
+	doneChan        chan struct{}
+	isClosed        bool
+	readBufferSize  int
+	writeBufferSize int
 	pingInterval    time.Duration
-	reconnectDelay   time.Duration
-	maxReconnects   int
+	pongTimeout     time.Duration
 }
 
-// WebSocketConfig configures a WebSocket Pregel protocol.
+// WebSocketConfig configures WebSocket connection.
 type WebSocketConfig struct {
-	URL           string
-	Headers       map[string]string
-	PingInterval  time.Duration
-	ReconnectDelay time.Duration
-	MaxReconnects int
+	URL            string
+	Headers        http.Header
+	ReadBufferSize int
+	WriteBufferSize int
+	PingInterval   time.Duration
+	PongTimeout    time.Duration
 }
 
 // NewWebSocketPregelProtocol creates a new WebSocket Pregel protocol.
-func NewWebSocketPregelProtocol(config *WebSocketConfig) (*WebSocketPregelProtocol, error) {
+func NewWebSocketPregelProtocol(config *WebSocketConfig) *WebSocketPregelProtocol {
+	if config.ReadBufferSize == 0 {
+		config.ReadBufferSize = 1024
+	}
+	if config.WriteBufferSize == 0 {
+		config.WriteBufferSize = 1024
+	}
 	if config.PingInterval == 0 {
 		config.PingInterval = 30 * time.Second
 	}
-	if config.ReconnectDelay == 0 {
-		config.ReconnectDelay = 1 * time.Second
-	}
-	if config.MaxReconnects == 0 {
-		config.MaxReconnects = 5
+	if config.PongTimeout == 0 {
+		config.PongTimeout = 60 * time.Second
 	}
 
-	// Connect to WebSocket server
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
+	return &WebSocketPregelProtocol{
+		url:             config.URL,
+		headers:         config.Headers,
+		messageChan:     make(chan *PregelMessage, 100),
+		doneChan:        make(chan struct{}),
+		isClosed:        false,
+		readBufferSize:  config.ReadBufferSize,
+		writeBufferSize: config.WriteBufferSize,
+		pingInterval:    config.PingInterval,
+		pongTimeout:     config.PongTimeout,
+	}
+}
 
-	headers := make(map[string][]string)
-	for k, v := range config.Headers {
-		headers[k] = []string{v}
+// Connect establishes the WebSocket connection.
+func (p *WebSocketPregelProtocol) Connect(ctx context.Context) error {
+	dialer := websocket.Dialer{
+		ReadBufferSize:  p.readBufferSize,
+		WriteBufferSize: p.writeBufferSize,
 	}
 
-	conn, _, err := dialer.Dial(config.URL, headers)
+	conn, _, err := dialer.DialContext(ctx, p.url, p.headers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to WebSocket: %w", err)
+		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
 
-	proto := &WebSocketPregelProtocol{
-		conn:         conn,
-		sendCh:       make(chan *PregelMessage, 256),
-		receiveCh:     make(chan *PregelMessage, 256),
-		closeCh:       make(chan struct{}),
-		url:          config.URL,
-		headers:      config.Headers,
-		pingInterval: config.PingInterval,
-		reconnectDelay: config.ReconnectDelay,
-		maxReconnects: config.MaxReconnects,
+	p.conn = conn
+
+	// Start background goroutines
+	go p.readLoop()
+	go p.pingLoop()
+
+	return nil
+}
+
+// readLoop continuously reads messages from the WebSocket.
+func (p *WebSocketPregelProtocol) readLoop() {
+	defer close(p.messageChan)
+
+	for {
+		select {
+		case <-p.doneChan:
+			return
+		default:
+		}
+
+		_, data, err := p.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				// Log unexpected close
+			}
+			return
+		}
+
+		var message PregelMessage
+		if err := json.Unmarshal(data, &message); err != nil {
+			// Log unmarshal error
+			continue
+		}
+
+		select {
+		case p.messageChan <- &message:
+		case <-p.doneChan:
+			return
+		}
 	}
+}
 
-	// Start send/receive goroutines
-	go proto.sendLoop()
-	go proto.receiveLoop()
-	go proto.pingLoop()
+// pingLoop sends periodic ping messages to keep the connection alive.
+func (p *WebSocketPregelProtocol) pingLoop() {
+	ticker := time.NewTicker(p.pingInterval)
+	defer ticker.Stop()
 
-	return proto, nil
+	for {
+		select {
+		case <-ticker.C:
+			if err := p.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(p.pongTimeout)); err != nil {
+				// Ping failed, connection might be dead
+				return
+			}
+		case <-p.doneChan:
+			return
+		}
+	}
 }
 
 // Send sends a message to the remote peer.
 func (p *WebSocketPregelProtocol) Send(ctx context.Context, message *PregelMessage) error {
-	message.Timestamp = time.Now()
-	
-	select {
-	case p.sendCh <- message:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("send cancelled: %w", ctx.Err())
-	case <-p.closeCh:
-		return fmt.Errorf("connection closed")
+	p.mu.RLock()
+	if p.isClosed {
+		p.mu.RUnlock()
+		return fmt.Errorf("websocket connection is closed")
 	}
+	conn := p.conn
+	p.mu.RUnlock()
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return fmt.Errorf("failed to send message: %w", err)
+	}
+
+	return nil
 }
 
 // Receive receives a message from the remote peer.
 func (p *WebSocketPregelProtocol) Receive(ctx context.Context) (*PregelMessage, error) {
 	select {
-	case msg := <-p.receiveCh:
-		return msg, nil
+	case message := <-p.messageChan:
+		return message, nil
 	case <-ctx.Done():
-		return nil, fmt.Errorf("receive cancelled: %w", ctx.Err())
-	case <-p.closeCh:
-		return nil, fmt.Errorf("connection closed")
+		return nil, ctx.Err()
+	case <-p.doneChan:
+		return nil, fmt.Errorf("websocket connection closed")
 	}
 }
 
-// Stream receives a stream of messages from the remote peer.
-func (p *WebSocketPregelProtocol) Stream(ctx context.Context) <-chan *PregelMessage {
-	streamCh := make(chan *PregelMessage)
-	
-	go func() {
-		defer close(streamCh)
-		for {
-			select {
-			case msg := <-p.receiveCh:
-				streamCh <- msg
-			case <-ctx.Done():
-				return
-			case <-p.closeCh:
-				return
-			}
-		}
-	}()
-	
-	return streamCh
-}
-
-// Close closes the WebSocket connection.
+// Close closes the protocol connection.
 func (p *WebSocketPregelProtocol) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	
-	select {
-	case <-p.closeCh:
-		// Already closed
+	if p.isClosed {
+		p.mu.Unlock()
 		return nil
-	default:
-		close(p.closeCh)
-		close(p.sendCh)
-		close(p.receiveCh)
+	}
+	p.isClosed = true
+	close(p.doneChan)
+	p.mu.Unlock()
+
+	if p.conn != nil {
+		// Send close message
+		p.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		// Close connection
 		return p.conn.Close()
 	}
+	return nil
 }
 
-// sendLoop handles sending messages to the WebSocket.
-func (p *WebSocketPregelProtocol) sendLoop() {
-	defer p.Close()
-	
-	for {
-		select {
-		case msg, ok := <-p.sendCh:
-			if !ok {
-				return
-			}
-			
-			data, err := json.Marshal(msg)
-			if err != nil {
-				fmt.Printf("failed to marshal message: %v\n", err)
-				continue
-			}
-			
-			p.mu.Lock()
-			err = p.conn.WriteMessage(websocket.TextMessage, data)
-			p.mu.Unlock()
-			
-			if err != nil {
-				fmt.Printf("failed to send message: %v\n", err)
-				p.reconnect()
-			}
-			
-		case <-p.closeCh:
-			return
-		}
+// IsConnected returns true if the WebSocket is connected.
+func (p *WebSocketPregelProtocol) IsConnected() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return !p.isClosed && p.conn != nil
+}
+
+// RemoteGraphClient provides a high-level client for remote graph execution over WebSocket.
+type RemoteGraphClient struct {
+	protocol    *WebSocketPregelProtocol
+	streamModes []types.StreamMode
+	mu          sync.RWMutex
+	handlers    map[MessageType]func(*PregelMessage)
+}
+
+// NewRemoteGraphClient creates a new remote graph client.
+func NewRemoteGraphClient(wsURL string, streamModes []types.StreamMode) *RemoteGraphClient {
+	return &RemoteGraphClient{
+		protocol: &WebSocketPregelProtocol{
+			url:         wsURL,
+			messageChan: make(chan *PregelMessage, 100),
+			doneChan:    make(chan struct{}),
+			isClosed:    false,
+		},
+		streamModes: streamModes,
+		handlers:    make(map[MessageType]func(*PregelMessage)),
 	}
 }
 
-// receiveLoop handles receiving messages from the WebSocket.
-func (p *WebSocketPregelProtocol) receiveLoop() {
-	defer p.Close()
-	
-	for {
-		p.mu.Lock()
-		messageType, data, err := p.conn.ReadMessage()
-		p.mu.Unlock()
-		
-		if err != nil {
-			if websocket.IsCloseError(err) || websocket.IsUnexpectedCloseError(err) {
-				fmt.Printf("WebSocket connection closed: %v\n", err)
-				p.reconnect()
-				continue
-			}
-			fmt.Printf("failed to read message: %v\n", err)
-			return
-		}
-		
-		if messageType != websocket.TextMessage {
-			fmt.Printf("unexpected message type: %d\n", messageType)
-			continue
-		}
-		
-		var msg PregelMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
-			fmt.Printf("failed to unmarshal message: %v\n", err)
-			continue
-		}
-		
-		select {
-		case p.receiveCh <- &msg:
-		case <-p.closeCh:
-			return
-		}
-	}
+// Connect establishes connection to the remote graph server.
+func (c *RemoteGraphClient) Connect(ctx context.Context) error {
+	return c.protocol.Connect(ctx)
 }
 
-// pingLoop sends periodic ping messages.
-func (p *WebSocketPregelProtocol) pingLoop() {
-	ticker := time.NewTicker(p.pingInterval)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-ticker.C:
-			pingMsg := &PregelMessage{
-				Type:      MessageTypePing,
-				ID:        generateMessageID(),
-				Timestamp: time.Now(),
-			}
-			
-			if err := p.Send(context.Background(), pingMsg); err != nil {
-				fmt.Printf("failed to send ping: %v\n", err)
-			}
-			
-		case <-p.closeCh:
-			return
-		}
-	}
-}
-
-// reconnect attempts to reconnect to the WebSocket server.
-func (p *WebSocketPregelProtocol) reconnect() {
-	for i := 0; i < p.maxReconnects; i++ {
-		time.Sleep(p.reconnectDelay)
-		
-		dialer := websocket.DefaultDialer
-		dialer.HandshakeTimeout = 10 * time.Second
-		
-		headers := make(map[string][]string)
-		for k, v := range p.headers {
-			headers[k] = []string{v}
-		}
-		
-		conn, _, err := dialer.Dial(p.url, headers)
-		if err != nil {
-			fmt.Printf("reconnect attempt %d failed: %v\n", i+1, err)
-			continue
-		}
-		
-		p.mu.Lock()
-		p.conn = conn
-		p.mu.Unlock()
-		
-		fmt.Printf("reconnected to WebSocket server\n")
-		return
-	}
-	
-	fmt.Printf("max reconnection attempts reached, closing connection\n")
-	p.Close()
-}
-
-// StreamingRemoteRunnable executes nodes remotely via WebSocket with streaming support.
-type StreamingRemoteRunnable struct {
-	protocol PregelProtocol
-	nodeName string
-}
-
-// NewStreamingRemoteRunnable creates a new streaming remote runnable.
-func NewStreamingRemoteRunnable(protocol PregelProtocol, nodeName string) *StreamingRemoteRunnable {
-	return &StreamingRemoteRunnable{
-		protocol: protocol,
-		nodeName: nodeName,
-	}
-}
-
-// Execute executes a node remotely (non-streaming).
-func (r *StreamingRemoteRunnable) Execute(ctx context.Context, input interface{}, config *types.RunnableConfig) (interface{}, error) {
+// Invoke executes the graph remotely and returns the final result.
+func (c *RemoteGraphClient) Invoke(ctx context.Context, input interface{}, config *types.RunnableConfig) (interface{}, error) {
+	// Send execute request
 	req := &PregelMessage{
 		Type:      MessageTypeExecute,
 		ID:        generateMessageID(),
-		NodeName:  r.nodeName,
 		Input:     input,
-		Metadata:  map[string]interface{}{},
+		Metadata: map[string]interface{}{
+			"config": config,
+			"stream_modes": c.streamModes,
+		},
 		Timestamp: time.Now(),
 	}
-	
-	if config != nil {
-		req.Metadata["config"] = config
+
+	if err := c.protocol.Send(ctx, req); err != nil {
+		return nil, err
 	}
-	
-	if err := r.protocol.Send(ctx, req); err != nil {
-		return nil, fmt.Errorf("failed to send execution request: %w", err)
-	}
-	
+
 	// Wait for response
 	for {
-		resp, err := r.protocol.Receive(ctx)
+		msg, err := c.protocol.Receive(ctx)
 		if err != nil {
 			return nil, err
 		}
-		
-		if resp.ID != req.ID {
-			// Not our response, continue waiting
-			continue
-		}
-		
-		switch resp.Type {
+
+		switch msg.Type {
 		case MessageTypeExecuteResponse:
-			if resp.Error != "" {
-				return nil, fmt.Errorf("remote execution error: %s", resp.Error)
+			if msg.Error != "" {
+				return nil, fmt.Errorf("remote execution error: %s", msg.Error)
 			}
-			return resp.Output, nil
-			
+			return msg.Output, nil
+		case MessageTypeCheckpoint:
+			// Handle checkpoint if needed
+		case MessageTypeStateUpdate:
+			// Handle state update if needed
 		case MessageTypeInterrupt:
 			// Handle interrupt
-			return nil, fmt.Errorf("execution interrupted: %s", resp.Error)
-			
-		default:
-			continue
+			return nil, fmt.Errorf("execution interrupted: %v", msg.Metadata)
 		}
 	}
 }
 
-// StreamExecute executes a node remotely with streaming output.
-func (r *StreamingRemoteRunnable) StreamExecute(ctx context.Context, input interface{}, config *types.RunnableConfig) (<-chan interface{}, error) {
-	outputCh := make(chan interface{}, 100)
-	
+// Stream executes the graph remotely and streams results.
+func (c *RemoteGraphClient) Stream(ctx context.Context, input interface{}, config *types.RunnableConfig) (<-chan *PregelMessage, error) {
+	// Send execute request with streaming
 	req := &PregelMessage{
 		Type:      MessageTypeExecute,
 		ID:        generateMessageID(),
-		NodeName:  r.nodeName,
 		Input:     input,
-		Metadata:  map[string]interface{}{},
+		Metadata: map[string]interface{}{
+			"config": config,
+			"stream_modes": c.streamModes,
+			"stream": true,
+		},
 		Timestamp: time.Now(),
 	}
-	
-	if config != nil {
-		req.Metadata["config"] = config
-		req.Metadata["stream"] = true
+
+	if err := c.protocol.Send(ctx, req); err != nil {
+		return nil, err
 	}
-	
-	if err := r.protocol.Send(ctx, req); err != nil {
-		return nil, fmt.Errorf("failed to send execution request: %w", err)
-	}
-	
-	// Start receiving stream
+
+	// Create output channel
+	outputChan := make(chan *PregelMessage, 100)
+
+	// Start goroutine to forward messages
 	go func() {
-		defer close(outputCh)
-		
-		streamCh := r.protocol.(*WebSocketPregelProtocol).Stream(ctx)
+		defer close(outputChan)
 		for {
+			msg, err := c.protocol.Receive(ctx)
+			if err != nil {
+				return
+			}
+
 			select {
-			case msg := <-streamCh:
-				if msg.ID != req.ID {
-					continue
-				}
-				
-				switch msg.Type {
-				case MessageTypeStateUpdate:
-					// Streaming output
-					outputCh <- msg.Output
-					
-				case MessageTypeExecuteResponse:
-					if msg.Error != "" {
-						outputCh <- fmt.Errorf("remote execution error: %s", msg.Error)
-					} else {
-						outputCh <- msg.Output
-					}
-					return
-					
-				case MessageTypeInterrupt:
-					outputCh <- fmt.Errorf("execution interrupted: %s", msg.Error)
-					return
-				}
-				
+			case outputChan <- msg:
 			case <-ctx.Done():
+				return
+			}
+
+			// Stop on final response
+			if msg.Type == MessageTypeExecuteResponse {
 				return
 			}
 		}
 	}()
-	
-	return outputCh, nil
+
+	return outputChan, nil
 }
 
-// CheckpointMigrator handles checkpoint migration between local and remote graphs.
-type CheckpointMigrator struct {
-	localProtocol  PregelProtocol
-	remoteProtocol PregelProtocol
+// OnMessage registers a handler for a specific message type.
+func (c *RemoteGraphClient) OnMessage(msgType MessageType, handler func(*PregelMessage)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.handlers[msgType] = handler
 }
 
-// NewCheckpointMigrator creates a new checkpoint migrator.
-func NewCheckpointMigrator(local, remote PregelProtocol) *CheckpointMigrator {
-	return &CheckpointMigrator{
-		localProtocol:  local,
-		remoteProtocol: remote,
-	}
-}
-
-// MigrateCheckpoint migrates a checkpoint from local to remote.
-func (m *CheckpointMigrator) MigrateCheckpoint(ctx context.Context, checkpointID string) error {
-	// Request checkpoint from local
-	req := &PregelMessage{
-		Type:      MessageTypeCheckpoint,
-		ID:        generateMessageID(),
-		Metadata: map[string]interface{}{
-			"checkpoint_id": checkpointID,
-			"action":       "get",
-		},
-		Timestamp: time.Now(),
-	}
-	
-	if err := m.localProtocol.Send(ctx, req); err != nil {
-		return fmt.Errorf("failed to request checkpoint: %w", err)
-	}
-	
-	resp, err := m.localProtocol.Receive(ctx)
-	if err != nil {
-		return err
-	}
-	
-	// Send checkpoint to remote
-	migrateReq := &PregelMessage{
-		Type:      MessageTypeCheckpoint,
-		ID:        generateMessageID(),
-		Output:    resp.Output,
-		Metadata: map[string]interface{}{
-			"checkpoint_id": checkpointID,
-			"action":       "migrate",
-		},
-		Timestamp: time.Now(),
-	}
-	
-	if err := m.remoteProtocol.Send(ctx, migrateReq); err != nil {
-		return fmt.Errorf("failed to send checkpoint: %w", err)
-	}
-	
-	// Wait for acknowledgment
-	ack, err := m.remoteProtocol.Receive(ctx)
-	if err != nil {
-		return err
-	}
-	
-	if ack.Type != MessageTypeCheckpoint || ack.Error != "" {
-		return fmt.Errorf("checkpoint migration failed: %s", ack.Error)
-	}
-	
-	return nil
-}
-
-// BidirectionalWebSocket creates a bidirectional WebSocket connection for remote graph execution.
-type BidirectionalWebSocket struct {
-	client   *WebSocketPregelProtocol
-	server   *WebSocketPregelProtocol
-	migrator *CheckpointMigrator
-}
-
-// NewBidirectionalWebSocket creates a new bidirectional WebSocket connection.
-func NewBidirectionalWebSocket(clientURL string, serverURL string) (*BidirectionalWebSocket, error) {
-	clientProto, err := NewWebSocketPregelProtocol(&WebSocketConfig{
-		URL: clientURL,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create client WebSocket: %w", err)
-	}
-	
-	serverProto, err := NewWebSocketPregelProtocol(&WebSocketConfig{
-		URL: serverURL,
-	})
-	if err != nil {
-		clientProto.Close()
-		return nil, fmt.Errorf("failed to create server WebSocket: %w", err)
-	}
-	
-	return &BidirectionalWebSocket{
-		client:   clientProto,
-		server:   serverProto,
-		migrator: NewCheckpointMigrator(clientProto, serverProto),
-	}, nil
-}
-
-// Close closes both WebSocket connections.
-func (b *BidirectionalWebSocket) Close() error {
-	var errs []error
-	
-	if err := b.client.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	
-	if err := b.server.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	
-	if len(errs) > 0 {
-		return fmt.Errorf("failed to close connections: %v", errs)
-	}
-	
-	return nil
+// Close closes the client connection.
+func (c *RemoteGraphClient) Close() error {
+	return c.protocol.Close()
 }
 
 // generateMessageID generates a unique message ID.
 func generateMessageID() string {
-	return fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), time.Now().Nanosecond())
+	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
 }
 
-// ValidateWebSocketURL validates a WebSocket URL.
-func ValidateWebSocketURL(wsURL string) error {
-	u, err := url.Parse(wsURL)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
-	}
-	
-	if u.Scheme != "ws" && u.Scheme != "wss" {
-		return fmt.Errorf("URL scheme must be ws or wss, got %s", u.Scheme)
-	}
-	
-	if u.Host == "" {
-		return fmt.Errorf("URL must have a host")
-	}
-	
-	return nil
+// GetReadBufferSize returns the read buffer size.
+func (p *WebSocketPregelProtocol) GetReadBufferSize() int {
+	return p.readBufferSize
+}
+
+// GetWriteBufferSize returns the write buffer size.
+func (p *WebSocketPregelProtocol) GetWriteBufferSize() int {
+	return p.writeBufferSize
+}
+
+// GetPingInterval returns the ping interval.
+func (p *WebSocketPregelProtocol) GetPingInterval() time.Duration {
+	return p.pingInterval
+}
+
+// GetPongTimeout returns the pong timeout.
+func (p *WebSocketPregelProtocol) GetPongTimeout() time.Duration {
+	return p.pongTimeout
 }

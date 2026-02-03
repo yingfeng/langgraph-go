@@ -176,7 +176,8 @@ func (e *PregelOptimizedEngine) compareTaskPriority(t1, t2 *Task) int {
 	return 0
 }
 
-// OptimizedApplyWrites implements optimized apply_writes with bump_step.
+// OptimizedApplyWrites implements optimized apply_writes with bump_step and finish notification.
+// This corresponds to Python's apply_writes function in _algo.py
 func (e *PregelOptimizedEngine) OptimizedApplyWrites(
 	ctx context.Context,
 	registry *channels.Registry,
@@ -185,59 +186,69 @@ func (e *PregelOptimizedEngine) OptimizedApplyWrites(
 	triggerToNodes map[string]struct{},
 ) (map[string]struct{}, error) {
 	updatedChannels := make(map[string]struct{})
-	
-	// Sort results by task name for deterministic execution
+
+	// Sort results by task path for deterministic execution (like Python's task sorting)
+	// This ensures consistent ordering across distributed executions
 	sort.Slice(results, func(i, j int) bool {
+		// First compare by path length (shorter first)
+		if len(results[i].Path) != len(results[j].Path) {
+			return len(results[i].Path) < len(results[j].Path)
+		}
+		// Then compare by path lexicographically
+		for k := 0; k < len(results[i].Path) && k < len(results[j].Path); k++ {
+			if results[i].Path[k] != results[j].Path[k] {
+				return results[i].Path[k] < results[j].Path[k]
+			}
+		}
+		// Finally by name
 		return results[i].Name < results[j].Name
 	})
-	
+
 	// Group and apply writes
 	writesByChannel := make(map[string][]interface{})
-	
+
 	for _, result := range results {
 		if result.Err != nil {
 			continue
 		}
-		
+
 		outputMap, err := toMap(result.Output)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert output to map: %w", err)
 		}
-		
+
 		for key, value := range outputMap {
 			if value == nil {
 				continue
 			}
-			
-			_ = value // Mark as used
-			
+
 			writesByChannel[key] = append(writesByChannel[key], value)
 		}
 	}
-	
+
 	// Apply writes with channel version management
 	for channelName, values := range writesByChannel {
 		ch, ok := registry.Get(channelName)
 		if !ok {
 			continue
 		}
-		
+
 		filtered := make([]interface{}, 0, len(values))
 		for _, v := range values {
 			if v != nil {
 				filtered = append(filtered, v)
 			}
 		}
-		
+
 		updated, err := ch.Update(filtered)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update channel %s: %w", channelName, err)
 		}
-		
+
 		if updated {
 			updatedChannels[channelName] = struct{}{}
 			e.readyChannels[channelName] = true
-			
+
 			// Bump step optimization
 			if e.config.BumpStep {
 				e.channelVersions[channelName]++
@@ -247,7 +258,31 @@ func (e *PregelOptimizedEngine) OptimizedApplyWrites(
 			}
 		}
 	}
-	
+
+	// Finish notification - notify all channels that this superstep is finishing
+	// This corresponds to Python's finish notification in apply_writes
+	if e.config.FinishNotification && len(updatedChannels) > 0 {
+		// Check if this might be the last superstep
+		// (all triggers have been processed)
+		allTriggersProcessed := true
+		for trigger := range triggerToNodes {
+			if _, ok := updatedChannels[trigger]; !ok {
+				// This trigger hasn't been updated yet
+				allTriggersProcessed = false
+				break
+			}
+		}
+
+		if allTriggersProcessed {
+			// Notify all channels that the run is finishing
+			for _, channelName := range registry.List() {
+				if ch, ok := registry.Get(channelName); ok {
+					ch.Finish()
+				}
+			}
+		}
+	}
+
 	return updatedChannels, nil
 }
 

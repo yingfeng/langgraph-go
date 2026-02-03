@@ -817,6 +817,48 @@ type TaskResult struct {
 	Name   string
 	Output interface{}
 	Err    error
+	Path   []string // Task path for deterministic ordering (like Python's task_path)
+}
+
+// TaskPathStr generates a deterministic string representation of the task path.
+// This corresponds to Python's task_path_str function in _algo.py
+func TaskPathStr(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	// Join path components with separator for deterministic ordering
+	return strings.Join(path, "/")
+}
+
+// ParseTaskPath parses a task path string back into a path array.
+func ParseTaskPath(pathStr string) []string {
+	if pathStr == "" {
+		return []string{}
+	}
+	return strings.Split(pathStr, "/")
+}
+
+// BuildTaskPath builds a task path from components.
+// Supports nested paths like Python's tuple-based paths.
+func BuildTaskPath(components ...interface{}) []string {
+	path := make([]string, 0, len(components))
+	for _, comp := range components {
+		switch v := comp.(type) {
+		case string:
+			path = append(path, v)
+		case int:
+			path = append(path, fmt.Sprintf("%d", v))
+		case []string:
+			path = append(path, v...)
+		default:
+			if s, ok := v.(fmt.Stringer); ok {
+				path = append(path, s.String())
+			} else {
+				path = append(path, fmt.Sprintf("%v", v))
+			}
+		}
+	}
+	return path
 }
 
 // Helper methods that need to be implemented by the StateGraph
