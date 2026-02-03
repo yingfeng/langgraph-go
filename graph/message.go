@@ -10,14 +10,26 @@ import (
 
 // Message represents a message in the conversation.
 type Message struct {
+	ID      string                 // Unique identifier for deduplication
 	Role    string                 // e.g., "user", "assistant", "system"
 	Content string                 // The message content
 	Extra   map[string]interface{} // Additional metadata
 }
 
-// NewMessage creates a new message.
+// NewMessage creates a new message without an ID.
 func NewMessage(role, content string) *Message {
 	return &Message{
+		ID:      "",
+		Role:    role,
+		Content: content,
+		Extra:   make(map[string]interface{}),
+	}
+}
+
+// NewMessageWithID creates a new message with an ID.
+func NewMessageWithID(id, role, content string) *Message {
+	return &Message{
+		ID:      id,
 		Role:    role,
 		Content: content,
 		Extra:   make(map[string]interface{}),

@@ -8,23 +8,35 @@ import (
 // PregelScratchpad provides temporary data storage for Pregel execution.
 // It stores data that is needed across nodes but not persisted to checkpoints.
 type PregelScratchpad struct {
-	mu         sync.RWMutex
-	data       map[string]interface{}
-	counters   map[string]int64
-	metadata   map[string]interface{}
-	createdAt  time.Time
-	lastAccess time.Time
+	mu               sync.RWMutex
+	data             map[string]interface{}
+	counters         map[string]int64
+	metadata         map[string]interface{}
+	createdAt        time.Time
+	lastAccess       time.Time
+	step             int64               // current step number
+	stop             bool                // stop flag
+	callCounter      int64               // number of calls
+	interruptCounter int64               // number of interrupts
+	resume           bool                // resume flag
+	subgraphCounter  int64               // subgraph invocation count
 }
 
 // NewPregelScratchpad creates a new scratchpad.
 func NewPregelScratchpad() *PregelScratchpad {
 	now := time.Now()
 	return &PregelScratchpad{
-		data:       make(map[string]interface{}),
-		counters:   make(map[string]int64),
-		metadata:   make(map[string]interface{}),
-		createdAt:  now,
-		lastAccess: now,
+		data:             make(map[string]interface{}),
+		counters:         make(map[string]int64),
+		metadata:         make(map[string]interface{}),
+		createdAt:        now,
+		lastAccess:       now,
+		step:             0,
+		stop:             false,
+		callCounter:      0,
+		interruptCounter: 0,
+		resume:           false,
+		subgraphCounter:  0,
 	}
 }
 
@@ -321,6 +333,99 @@ func (s *ScratchpadStack) IsEmpty() bool {
 // Clear clears the stack.
 func (s *ScratchpadStack) Clear() {
 	s.scratchpad.Delete(s.key)
+}
+
+// Step returns the current step number.
+func (p *PregelScratchpad) Step() int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.step
+}
+
+// SetStep sets the current step number.
+func (p *PregelScratchpad) SetStep(step int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.step = step
+	p.lastAccess = time.Now()
+}
+
+// Stop returns the stop flag.
+func (p *PregelScratchpad) Stop() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.stop
+}
+
+// SetStop sets the stop flag.
+func (p *PregelScratchpad) SetStop(stop bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stop = stop
+	p.lastAccess = time.Now()
+}
+
+// CallCounter returns the number of calls.
+func (p *PregelScratchpad) CallCounter() int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.callCounter
+}
+
+// IncrementCallCounter increments the call counter.
+func (p *PregelScratchpad) IncrementCallCounter() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.callCounter++
+	p.lastAccess = time.Now()
+	return p.callCounter
+}
+
+// InterruptCounter returns the number of interrupts.
+func (p *PregelScratchpad) InterruptCounter() int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.interruptCounter
+}
+
+// IncrementInterruptCounter increments the interrupt counter.
+func (p *PregelScratchpad) IncrementInterruptCounter() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.interruptCounter++
+	p.lastAccess = time.Now()
+	return p.interruptCounter
+}
+
+// Resume returns the resume flag.
+func (p *PregelScratchpad) Resume() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.resume
+}
+
+// SetResume sets the resume flag.
+func (p *PregelScratchpad) SetResume(resume bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resume = resume
+	p.lastAccess = time.Now()
+}
+
+// SubgraphCounter returns the subgraph invocation count.
+func (p *PregelScratchpad) SubgraphCounter() int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.subgraphCounter
+}
+
+// IncrementSubgraphCounter increments the subgraph counter.
+func (p *PregelScratchpad) IncrementSubgraphCounter() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.subgraphCounter++
+	p.lastAccess = time.Now()
+	return p.subgraphCounter
 }
 
 // Stats returns statistics about the scratchpad.
