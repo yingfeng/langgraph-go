@@ -370,11 +370,25 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 }
 
 // prepareNextTasks determines which tasks to execute next.
+// This is the standard version that prepares tasks for execution.
 func (e *Engine) prepareNextTasks(
 	registry *channels.Registry,
 	completedTasks map[string]bool,
 	lastCompletedNode string,
 	currentState interface{},
+) ([]*Task, map[string]struct{}, error) {
+	return e.prepareNextTasksWithMode(registry, completedTasks, lastCompletedNode, currentState, true)
+}
+
+// prepareNextTasksWithMode determines which tasks to execute next with for_execution mode.
+// When forExecution is true, tasks are prepared for actual execution.
+// When forExecution is false, only task information is prepared (for inspection/planning).
+func (e *Engine) prepareNextTasksWithMode(
+	registry *channels.Registry,
+	completedTasks map[string]bool,
+	lastCompletedNode string,
+	currentState interface{},
+	forExecution bool,
 ) ([]*Task, map[string]struct{}, error) {
 	tasks := make([]*Task, 0)
 	triggerToNodes := make(map[string]struct{})
@@ -411,7 +425,14 @@ func (e *Engine) prepareNextTasks(
 		
 		// Don't re-execute completed nodes
 		if !completedTasks[nodeName] {
-			task := e.createTask(node, currentState, triggers, []string{})
+			var task *Task
+			if forExecution {
+				// Prepare task for actual execution
+				task = e.createTask(node, currentState, triggers, []string{})
+			} else {
+				// Prepare task info only (for inspection/planning)
+				task = e.createTaskInfo(node, currentState, triggers, []string{})
+			}
 			tasks = append(tasks, task)
 			
 			// Build trigger to nodes mapping
@@ -895,6 +916,38 @@ func (e *Engine) createTask(node interface{}, state interface{}, channels []stri
 		Channels: channels,
 		Triggers: make(map[string]struct{}),
 	}
+}
+
+// createTaskInfo creates a task info object for inspection/planning (for_execution=false mode).
+// This is similar to Python's prepare_next_tasks with for_execution=False.
+func (e *Engine) createTaskInfo(node interface{}, state interface{}, channels []string, triggers []string) *Task {
+	// Create a task info without the actual function binding
+	// This is used for planning/inspection without actual execution
+	task := &Task{
+		ID:       uuid.New().String(),
+		Name:     "", // Will be populated from node
+		Channels: channels,
+		Triggers: make(map[string]struct{}),
+		Func:     nil, // No function binding for info-only tasks
+	}
+	
+	// Populate triggers
+	for _, trigger := range triggers {
+		task.Triggers[trigger] = struct{}{}
+	}
+	
+	return task
+}
+
+// PrepareNextTasksForInspection prepares tasks for inspection/planning only (for_execution=false).
+// This corresponds to Python's prepare_next_tasks with for_execution=False.
+func (e *Engine) PrepareNextTasksForInspection(
+	registry *channels.Registry,
+	completedTasks map[string]bool,
+	lastCompletedNode string,
+	currentState interface{},
+) ([]*Task, map[string]struct{}, error) {
+	return e.prepareNextTasksWithMode(registry, completedTasks, lastCompletedNode, currentState, false)
 }
 
 func (e *Engine) applyInput(registry *channels.Registry, input interface{}) error {

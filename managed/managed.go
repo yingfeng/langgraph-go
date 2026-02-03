@@ -2,6 +2,7 @@
 package managed
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 )
@@ -567,6 +568,23 @@ func (r *Runtime) Merge(other *Runtime) *Runtime {
 	}
 
 	return merged
+}
+
+// Set sets a value in the runtime's Configurable map.
+func (r *Runtime) Set(ctx context.Context, key string, value interface{}) {
+	if r.Configurable == nil {
+		r.Configurable = make(map[string]interface{})
+	}
+	r.Configurable[key] = value
+}
+
+// Get gets a value from the runtime's Configurable map.
+func (r *Runtime) Get(ctx context.Context, key string) (interface{}, bool) {
+	if r.Configurable == nil {
+		return nil, false
+	}
+	val, ok := r.Configurable[key]
+	return val, ok
 }
 
 // Override creates a new runtime with the given overrides.
