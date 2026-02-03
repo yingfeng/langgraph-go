@@ -13,6 +13,7 @@ LangGraph Go is a Go port of [LangGraph](https://github.com/langchain-ai/langgra
 - **Human-in-the-Loop**: Interrupt flows for human approval or input
 - **Streaming**: Real-time output streaming during graph execution
 - **Type-Safe**: Strong typing with Go generics support
+- **OpenTelemetry Integration**: Distributed tracing and metrics for observability
 
 ## Installation
 
@@ -204,6 +205,7 @@ langgraph-go/
 ├── examples/      # Example applications
 ├── graph/         # Graph building and execution
 ├── interrupt/     # Human-in-the-loop functionality
+├── telemetry/     # OpenTelemetry observability
 ├── types/         # Core type definitions
 └── utils/         # Utility functions
 ```
@@ -220,6 +222,132 @@ LangGraph Go follows the [Pregel](https://research.google.com/pubs/pub37252.html
    - Apply writes to channels
    - Check for interrupts
    - Repeat until complete or recursion limit reached
+
+## Observability with OpenTelemetry
+
+LangGraph Go provides comprehensive OpenTelemetry support for distributed tracing and metrics collection.
+
+### Basic Setup
+
+```go
+import "github.com/langgraph-go/langgraph/telemetry"
+
+// Initialize for development
+shutdown, err := telemetry.InitForDevelopment("my-app")
+if err != nil {
+    log.Fatal(err)
+}
+defer shutdown(context.Background())
+
+// Initialize for production
+shutdown, err := telemetry.InitForProduction(
+    "my-app",
+    "1.0.0",
+    "production",
+    "otel-collector:4317",
+)
+defer shutdown(context.Background())
+```
+
+### Instrumenting Runnables
+
+```go
+// Create telemetry provider
+provider, err := telemetry.NewDefaultTelemetryProvider()
+if err != nil {
+    log.Fatal(err)
+}
+
+// Create tracer
+tracer := telemetry.NewRunnableTracer(provider)
+
+// Instrument a runnable
+myRunnable := runnable.NewInjectableRunnable("my-node", func(ctx context.Context, input interface{}) (interface{}, error) {
+    return process(input), nil
+})
+
+tracedRunnable := tracer.TraceRunnable(myRunnable)
+
+// Execute with automatic tracing
+result, err := tracedRunnable.Invoke(ctx, input)
+```
+
+### Instrumenting Node Functions
+
+```go
+// Wrap node function with instrumentation
+nodeFunc := func(ctx context.Context, input interface{}) (interface{}, error) {
+    time.Sleep(50 * time.Millisecond)
+    return input, nil
+}
+
+tracedNode := tracer.TraceNode("process", nodeFunc)
+result, err := tracedNode(ctx, "input")
+```
+
+### Manual Spans
+
+```go
+// Run code within a span
+err := telemetry.RunInSpan(ctx, "custom-operation", func(ctx context.Context) error {
+    // Your code here
+    return nil
+})
+
+// Or with result
+result, err := telemetry.RunInSpanWithResult(ctx, "operation", func(ctx context.Context) (string, error) {
+    return "success", nil
+})
+```
+
+### Recording Metrics
+
+```go
+metrics := provider.Metrics
+
+// Record node execution
+metrics.RecordNodeExecution(ctx, "node-name", "input-type", "output-type", 100*time.Millisecond, nil)
+
+// Record cache operations
+metrics.RecordCacheHit(ctx, "cache-key")
+metrics.RecordCacheMiss(ctx, "cache-key")
+
+// Record messages and tokens
+metrics.RecordMessagesProcessed(ctx, 5)
+metrics.RecordTokensProcessed(ctx, 128)
+```
+
+### Configuration
+
+OpenTelemetry can be configured via environment variables:
+
+- `OTEL_SERVICE_NAME`: Service name
+- `OTEL_EXPORTER_CONSOLE`: Set to "true" for console output
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP collector endpoint
+
+Or programmatically:
+
+```go
+cfg := &telemetry.Config{
+    ServiceName:        "my-service",
+    ServiceVersion:     "1.0.0",
+    Environment:        "production",
+    EnableTracing:      true,
+    EnableMetrics:      true,
+    SampleRate:         0.1, // 10% sampling
+    OTLPEndpoint:       "otel-collector:4317",
+    UseConsoleExporter: false,
+    ResourceAttributes: map[string]string{
+        "team":  "langgraph",
+        "owner": "platform",
+    },
+}
+
+shutdown, err := telemetry.Init(cfg)
+defer shutdown(context.Background())
+```
+
+For more details, see the [telemetry README](telemetry/README.md) and [examples](examples/telemetry/).
 
 ## Differences from Python LangGraph
 
