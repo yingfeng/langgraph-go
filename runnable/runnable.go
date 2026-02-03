@@ -3,6 +3,7 @@ package runnable
 import (
 	"context"
 	"fmt"
+	"reflect"
 )
 
 // Runnable is the base interface for all runnable components.
@@ -380,10 +381,102 @@ func CoerceToRunnable(value interface{}) (Runnable[any, any], error) {
 	case Runnable[any, any]:
 		return v, nil
 	default:
+		// Check if it's a function
+		valType := reflect.TypeOf(value)
+		if valType == nil {
+			return nil, &RunnableError{
+				Message: "cannot coerce nil to Runnable",
+			}
+		}
+		
+		if valType.Kind() == reflect.Func {
+			// Try to wrap it as a RunnableFunc
+			return coerceFuncToRunnable(value, valType)
+		}
+		
 		return nil, &RunnableError{
 			Message: fmt.Sprintf("cannot coerce %T to Runnable", value),
 		}
 	}
+}
+
+// coerceFuncToRunnable coerces a function to a Runnable.
+func coerceFuncToRunnable(fn interface{}, fnType reflect.Type) (Runnable[any, any], error) {
+	// Check function signature
+	numIn := fnType.NumIn()
+	numOut := fnType.NumOut()
+	
+	// Supported signatures:
+	// 1. func(context.Context, T) (U, error)
+	// 2. func(T) U
+	// 3. func(T) (U, error)
+	// 4. func() U
+	// 5. func() (U, error)
+	
+	// We'll create a wrapper that adapts the function to Runnable[any, any]
+	wrapper := func(ctx context.Context, input interface{}) (interface{}, error) {
+		// Prepare arguments
+		args := make([]reflect.Value, 0, numIn)
+		
+		argIndex := 0
+		// Check if first argument is context.Context
+		if numIn > 0 && fnType.In(0).AssignableTo(reflect.TypeOf((*context.Context)(nil)).Elem()) {
+			args = append(args, reflect.ValueOf(ctx))
+			argIndex++
+		}
+		
+		// Add input argument if needed
+		if argIndex < numIn {
+			inputVal := reflect.ValueOf(input)
+			paramType := fnType.In(argIndex)
+			
+			// Try to convert input to expected type
+			if input != nil && inputVal.Type().AssignableTo(paramType) {
+				args = append(args, inputVal)
+			} else if input != nil && inputVal.Type().ConvertibleTo(paramType) {
+				args = append(args, inputVal.Convert(paramType))
+			} else {
+				// Use zero value
+				args = append(args, reflect.Zero(paramType))
+			}
+			argIndex++
+		}
+		
+		// Fill remaining parameters with zero values
+		for ; argIndex < numIn; argIndex++ {
+			args = append(args, reflect.Zero(fnType.In(argIndex)))
+		}
+		
+		// Call function
+		results := reflect.ValueOf(fn).Call(args)
+		
+		// Process results
+		if numOut == 0 {
+			return nil, nil
+		} else if numOut == 1 {
+			// Single return value
+			result := results[0].Interface()
+			// Check if it's an error
+			if err, ok := result.(error); ok {
+				return nil, err
+			}
+			return result, nil
+		} else if numOut == 2 {
+			// Two return values: result, error
+			result := results[0].Interface()
+			errVal := results[1].Interface()
+			if errVal != nil {
+				return result, errVal.(error)
+			}
+			return result, nil
+		}
+		
+		return nil, &RunnableError{
+			Message: fmt.Sprintf("unsupported number of return values: %d", numOut),
+		}
+	}
+	
+	return NewRunnableFunc(wrapper), nil
 }
 
 // RunnableError represents a runnable-related error.

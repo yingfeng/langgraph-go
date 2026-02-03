@@ -179,14 +179,14 @@ func TestWaitAny(t *testing.T) {
 	ctx := context.Background()
 	f1 := NewFuture[int]()
 	f2 := NewFuture[int]()
-	f3 := NewCompletedFuture(3, nil)
+	f3 := NewCompletedFuture[int](3, nil)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		f1.Set(1)
 	}()
 
-	index, value, err := WaitAny(ctx, f1, f2, f3)
+	index, value, err := WaitAny[int](ctx, f1, f2, f3)
 	if err != nil {
 		t.Fatalf("WaitAny failed: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestMap(t *testing.T) {
 	f := NewFuture[int]()
 	f.Set(10)
 
-	mapped := Map(f, func(n int) (string, error) {
+	mapped := Map[int, string](f, func(n int) (string, error) {
 		return "value:" + string(rune('0'+n)), nil
 	})
 
@@ -220,7 +220,7 @@ func TestFlatMap(t *testing.T) {
 	f := NewFuture[int]()
 	f.Set(5)
 
-	mapped := FlatMap(f, func(n int) Future[string] {
+	mapped := FlatMap[int, string](f, func(n int) Future[string] {
 		result := NewFuture[string]()
 		result.Set("mapped:" + string(rune('0'+n)))
 		return result
@@ -268,7 +268,7 @@ func TestRace(t *testing.T) {
 		f2.Set(2)
 	}()
 
-	race := Race(f1, f2, f3)
+	race := Race[int](f1, f2, f3)
 
 	ctx := context.Background()
 	result, err := race.Get(ctx)

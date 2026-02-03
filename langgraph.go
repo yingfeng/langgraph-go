@@ -60,6 +60,7 @@ import (
 	"github.com/langgraph-go/langgraph/errors"
 	"github.com/langgraph-go/langgraph/graph"
 	"github.com/langgraph-go/langgraph/interrupt"
+	"github.com/langgraph-go/langgraph/prebuilt"
 	"github.com/langgraph-go/langgraph/types"
 )
 
@@ -88,7 +89,12 @@ type (
 	
 	// SqliteSaver is a SQLite-based checkpoint saver.
 	SqliteSaver = checkpoint.SqliteSaver
-	
+
+	// PostgresSaver is a PostgreSQL-based checkpoint saver.
+	PostgresSaver = checkpoint.PostgresSaver
+	// PostgresConfig holds configuration for PostgreSQL connection.
+	PostgresConfig = checkpoint.PostgresConfig
+
 	// Channel is the base interface for all channels.
 	Channel = channels.Channel
 	
@@ -139,18 +145,39 @@ type (
 	
 	// Command is used to update the graph's state and send messages to nodes.
 	Command = types.Command
-	
+
 	// Interrupt represents information about an interrupt.
 	Interrupt = types.Interrupt
-	
+
 	// NodeFunc is the signature of a node function.
 	NodeFunc = types.NodeFunc
-	
+
 	// EdgeFunc is the signature of an edge/condition function.
 	EdgeFunc = types.EdgeFunc
-	
+
 	// StreamWriter writes data to the output stream.
 	StreamWriter = types.StreamWriter
+
+	// Prebuilt types
+	ReactAgentConfig = prebuilt.ReactAgentConfig
+	ReActState       = prebuilt.ReActState
+	Tool             = prebuilt.Tool
+	ToolCall         = prebuilt.ToolCall
+	LLM              = prebuilt.LLM
+)
+
+// Prebuilt component functions.
+var (
+	// CreateReactAgent creates a new ReAct (Reasoning + Acting) agent.
+	CreateReactAgent = prebuilt.CreateReactAgent
+	// ToolNode creates a node that executes a tool.
+	ToolNode = prebuilt.ToolNode
+	// ValidationNode creates a node that validates input.
+	ValidationNode = prebuilt.ValidationNode
+	// ConditionalNode creates a node that routes based on a condition.
+	ConditionalNode = prebuilt.ConditionalNode
+	// TransformNode creates a node that transforms input.
+	TransformNode = prebuilt.TransformNode
 )
 
 // Re-export constants.
@@ -205,6 +232,16 @@ func NewMemorySaver() *MemorySaver {
 // NewSqliteSaver creates a new SQLite checkpoint saver.
 func NewSqliteSaver(dbPath string) (*SqliteSaver, error) {
 	return checkpoint.NewSqliteSaver(dbPath)
+}
+
+// NewPostgresSaver creates a new PostgreSQL checkpoint saver.
+func NewPostgresSaver(connString string) (*PostgresSaver, error) {
+	return checkpoint.NewPostgresSaver(connString)
+}
+
+// NewPostgresSaverWithConfig creates a new PostgreSQL checkpoint saver with explicit config.
+func NewPostgresSaverWithConfig(config *PostgresConfig) (*PostgresSaver, error) {
+	return checkpoint.NewPostgresSaverWithConfig(config)
 }
 
 // Compile options.
