@@ -381,13 +381,21 @@ func (s *Server) handleDeleteAssistant(w http.ResponseWriter, r *http.Request, a
 // handleSearchAssistants searches assistants.
 func (s *Server) handleSearchAssistants(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Metadata map[string]interface{} `json:"metadata,omitempty"`
-		Limit    int                    `json:"limit,omitempty"`
+		Metadata       map[string]interface{} `json:"metadata,omitempty"`
+		Limit          int                    `json:"limit,omitempty"`
+		Offset         int                    `json:"offset,omitempty"`
+		GraphID        string                 `json:"graph_id,omitempty"`
+		Name           string                 `json:"name,omitempty"`
+		ResponseFormat string                 `json:"response_format,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
+		// Handle empty body
+		req.Limit = 10
+	}
+
+	if req.Limit <= 0 {
+		req.Limit = 10
 	}
 
 	s.mu.RLock()
@@ -395,6 +403,16 @@ func (s *Server) handleSearchAssistants(w http.ResponseWriter, r *http.Request) 
 
 	assistants := make([]*Assistant, 0)
 	for _, a := range s.assistants {
+		// Filter by graph_id
+		if req.GraphID != "" && a.GraphID != req.GraphID {
+			continue
+		}
+
+		// Filter by name (substring match)
+		if req.Name != "" && !strings.Contains(strings.ToLower(a.Name), strings.ToLower(req.Name)) {
+			continue
+		}
+
 		// Simple metadata matching
 		if req.Metadata != nil {
 			match := true
@@ -409,24 +427,70 @@ func (s *Server) handleSearchAssistants(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		assistants = append(assistants, a)
-		if req.Limit > 0 && len(assistants) >= req.Limit {
+		if len(assistants) >= req.Limit {
 			break
 		}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"assistants": assistants,
-	})
+	// Python SDK expects direct array by default, or object with pagination when response_format="object"
+	if req.ResponseFormat == "object" {
+		w.Header().Set("Content-Type", "application/json")
+		s.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"assistants": assistants,
+			"next":       nil,
+		})
+	} else {
+		// Return direct array for compatibility with Python SDK default
+		s.writeJSON(w, http.StatusOK, assistants)
+	}
 }
 
 // handleCountAssistants counts assistants.
 func (s *Server) handleCountAssistants(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Metadata map[string]interface{} `json:"metadata,omitempty"`
+		GraphID  string                 `json:"graph_id,omitempty"`
+		Name     string                 `json:"name,omitempty"`
+	}
+
+	// Try to decode body (optional)
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	s.writeJSON(w, http.StatusOK, map[string]int{
-		"count": len(s.assistants),
-	})
+	count := 0
+	for _, a := range s.assistants {
+		// Filter by graph_id
+		if req.GraphID != "" && a.GraphID != req.GraphID {
+			continue
+		}
+
+		// Filter by name (substring match)
+		if req.Name != "" && !strings.Contains(strings.ToLower(a.Name), strings.ToLower(req.Name)) {
+			continue
+		}
+
+		// Simple metadata matching
+		if req.Metadata != nil {
+			match := true
+			for k, v := range req.Metadata {
+				if a.Metadata[k] != v {
+					match = false
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		count++
+	}
+
+	// Python SDK expects direct integer, not a JSON object
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(count)
 }
 
 // handleThreadsAPI handles all thread-related API calls
@@ -493,9 +557,12 @@ func (s *Server) handleThreadsAPI(w http.ResponseWriter, r *http.Request, fullPa
 		subParts := strings.SplitN(subPath, "/", 2)
 		if len(subParts) == 1 || subParts[1] == "" {
 			// /threads/{thread_id}/runs
-			if r.Method == http.MethodPost {
+			switch r.Method {
+			case http.MethodGet:
+				s.handleListThreadRuns(w, r, threadID)
+			case http.MethodPost:
 				s.handleCreateRun(w, r, threadID)
-			} else {
+			default:
 				s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 			}
 		} else {
@@ -811,6 +878,21 @@ func (s *Server) executeRun(run *Run, g *graph.CompiledGraph) {
 		run.Output = output
 	}
 	run.UpdatedAt = time.Now()
+}
+
+// handleListThreadRuns lists all runs for a thread.
+func (s *Server) handleListThreadRuns(w http.ResponseWriter, r *http.Request, threadID string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	runs := make([]*Run, 0)
+	for _, run := range s.runs {
+		if run.ThreadID == threadID {
+			runs = append(runs, run)
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, runs)
 }
 
 // handleGetRun gets a specific run.
