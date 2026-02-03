@@ -264,6 +264,11 @@ func (ds *DuplexStream) Mode() StreamMode {
 	return ds.output.Mode()
 }
 
+// Output returns the output stream.
+func (ds *DuplexStream) Output() StreamProtocol {
+	return ds.output
+}
+
 // FilterStream filters chunks based on a predicate function.
 type FilterStream struct {
 	source StreamProtocol

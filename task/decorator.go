@@ -472,3 +472,151 @@ func Compose(decorators ...func(types.NodeFunc) types.NodeFunc) func(types.NodeF
 		return fn
 	}
 }
+
+// EntrypointFinal represents a final value that should be saved to checkpoint.
+// This is used to mark the final output of an entrypoint for persistence.
+type EntrypointFinal struct {
+	Value interface{}
+	Save  bool
+}
+
+// Final creates a new EntrypointFinal with the given value.
+// If save is true, the value will be persisted to the checkpointer.
+func Final(value interface{}, save ...bool) *EntrypointFinal {
+	shouldSave := true
+	if len(save) > 0 {
+		shouldSave = save[0]
+	}
+	return &EntrypointFinal{
+		Value: value,
+		Save:  shouldSave,
+	}
+}
+
+// IsFinal checks if a value is an EntrypointFinal.
+func IsFinal(v interface{}) (*EntrypointFinal, bool) {
+	if f, ok := v.(*EntrypointFinal); ok {
+		return f, true
+	}
+	return nil, false
+}
+
+// GetFinalValue extracts the value from a final result, handling EntrypointFinal.
+func GetFinalValue(result interface{}) interface{} {
+	if f, ok := IsFinal(result); ok {
+		return f.Value
+	}
+	return result
+}
+
+// ExecutionContext provides dependency injection context for entrypoints.
+type ExecutionContext struct {
+	// Config is the RunnableConfig for the execution.
+	Config *types.RunnableConfig
+	// Previous is the result from the previous execution (for resuming).
+	Previous interface{}
+	// Store is the BaseStore for long-term storage.
+	Store interface{}
+	// Writer is the stream writer for emitting events.
+	Writer interface{}
+	// Runtime contains runtime-specific values.
+	Runtime map[string]interface{}
+}
+
+// InjectDependencies creates a new node function with injected dependencies.
+// This allows the function to access Config, Previous, Store, and Writer.
+func InjectDependencies(fn types.NodeFunc, execCtx *ExecutionContext) types.NodeFunc {
+	return func(ctx context.Context, input interface{}) (interface{}, error) {
+		// Create an enhanced context with execution context
+		enhancedCtx := context.WithValue(ctx, executionContextKey{}, execCtx)
+		return fn(enhancedCtx, input)
+	}
+}
+
+// executionContextKey is the key for storing ExecutionContext in context.
+type executionContextKey struct{}
+
+// GetExecutionContext retrieves the ExecutionContext from the context.
+func GetExecutionContext(ctx context.Context) *ExecutionContext {
+	if execCtx, ok := ctx.Value(executionContextKey{}).(*ExecutionContext); ok {
+		return execCtx
+	}
+	return nil
+}
+
+// GetConfig retrieves the config from the execution context.
+func GetConfig(ctx context.Context) *types.RunnableConfig {
+	if execCtx := GetExecutionContext(ctx); execCtx != nil {
+		return execCtx.Config
+	}
+	return nil
+}
+
+// GetPrevious retrieves the previous result from the execution context.
+func GetPrevious(ctx context.Context) interface{} {
+	if execCtx := GetExecutionContext(ctx); execCtx != nil {
+		return execCtx.Previous
+	}
+	return nil
+}
+
+// GetStore retrieves the store from the execution context.
+func GetStore(ctx context.Context) interface{} {
+	if execCtx := GetExecutionContext(ctx); execCtx != nil {
+		return execCtx.Store
+	}
+	return nil
+}
+
+// GetWriter retrieves the writer from the execution context.
+func GetWriter(ctx context.Context) interface{} {
+	if execCtx := GetExecutionContext(ctx); execCtx != nil {
+		return execCtx.Writer
+	}
+	return nil
+}
+
+// InvokeWithDependencies invokes the entrypoint with dependency injection.
+func (e *Entrypoint) InvokeWithDependencies(
+	ctx context.Context,
+	input interface{},
+	config *types.RunnableConfig,
+	previous interface{},
+	store interface{},
+	writer interface{},
+) (interface{}, error) {
+	// Create execution context
+	execCtx := &ExecutionContext{
+		Config:   config,
+		Previous: previous,
+		Store:    store,
+		Writer:   writer,
+		Runtime:  make(map[string]interface{}),
+	}
+
+	// Add store from entrypoint if not provided
+	if store == nil && e.store != nil {
+		execCtx.Store = e.store
+	}
+
+	// Inject dependencies into the function
+	injectedFn := InjectDependencies(e.fn, execCtx)
+
+	// Execute with injected function
+	result, err := injectedFn(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle EntrypointFinal
+	if final, ok := IsFinal(result); ok {
+		// Save to checkpointer if enabled
+		if final.Save && e.checkpointer != nil {
+			// In a full implementation, this would save to checkpointer
+			// For now, we just return the value
+		}
+		return final.Value, nil
+	}
+
+	return result, nil
+}

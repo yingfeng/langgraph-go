@@ -19,19 +19,28 @@ import (
 
 // Engine implements the Pregel execution model.
 type Engine struct {
-	graph             interface{} // StateGraph
-	checkpointer      graph.Checkpointer
-	interrupts        map[string]bool
-	recursionLimit    int
-	debug             bool
-	config            *types.RunnableConfig
-	maxConcurrency    int
-	retryPolicy       *types.RetryPolicy
-	currentCheckpoint *checkpoint.Checkpoint
-	channelVersions   map[string]int
-	versionsSeen      map[string]map[string]int
-	cache             Cache
-	backgroundExec    *BackgroundExecutor
+	graph               interface{} // StateGraph
+	checkpointer        graph.Checkpointer
+	interrupts          map[string]bool
+	recursionLimit      int
+	debug               bool
+	config              *types.RunnableConfig
+	maxConcurrency      int
+	retryPolicy         *types.RetryPolicy
+	currentCheckpoint   *checkpoint.Checkpoint
+	channelVersions     map[string]int
+	versionsSeen        map[string]map[string]int
+	cache               Cache
+	backgroundExec      *BackgroundExecutor
+	deferredCheckpoints []deferredCheckpoint // for DurabilityExit mode
+}
+
+// deferredCheckpoint stores checkpoint data for deferred saving (DurabilityExit mode)
+type deferredCheckpoint struct {
+	ThreadID    string
+	CheckpointID string
+	Step        int
+	Checkpoint  map[string]interface{}
 }
 
 // NewEngine creates a new Pregel engine.
@@ -302,17 +311,36 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 				streamManager.EmitValues(step, values)
 			}
 			
-			// Save checkpoint
+			// Save checkpoint based on durability mode
 			if e.checkpointer != nil {
 				checkpoint := channelRegistry.CreateCheckpoint()
 				checkpointID := uuid.New().String()
-				if err := e.checkpointer.Put(ctx, map[string]interface{}{
-					"thread_id": threadID,
-					"checkpoint_id": checkpointID,
-					"step": step,
-				}, checkpoint); err != nil {
-					errCh <- fmt.Errorf("failed to save checkpoint: %w", err)
-					return
+				
+				switch e.config.Durability {
+				case types.DurabilitySync:
+					// Synchronous save - block until complete
+					if err := e.saveCheckpoint(ctx, threadID, checkpointID, step, checkpoint); err != nil {
+						errCh <- fmt.Errorf("failed to save checkpoint: %w", err)
+						return
+					}
+				case types.DurabilityAsync:
+					// Asynchronous save - don't block next step
+					go func(cp map[string]interface{}, cpID string, s int) {
+						if err := e.saveCheckpoint(context.Background(), threadID, cpID, s, cp); err != nil {
+							// Log async error but don't fail execution
+							fmt.Printf("async checkpoint save failed: %v\n", err)
+						}
+					}(checkpoint, checkpointID, step)
+				case types.DurabilityExit:
+					// Defer save until exit - accumulate checkpoints in memory
+					// Will be saved in final state
+					e.deferCheckpoint(threadID, checkpointID, step, checkpoint)
+				default:
+					// Default to sync behavior
+					if err := e.saveCheckpoint(ctx, threadID, checkpointID, step, checkpoint); err != nil {
+						errCh <- fmt.Errorf("failed to save checkpoint: %w", err)
+						return
+					}
 				}
 			}
 			
@@ -324,6 +352,14 @@ func (e *Engine) Run(ctx context.Context, input interface{}, mode types.StreamMo
 		if err != nil {
 			errCh <- fmt.Errorf("failed to build output: %w", err)
 			return
+		}
+		
+		// Save deferred checkpoints for DurabilityExit mode
+		if e.config.Durability == types.DurabilityExit {
+			if err := e.saveDeferredCheckpoints(ctx); err != nil {
+				errCh <- fmt.Errorf("failed to save deferred checkpoints: %w", err)
+				return
+			}
 		}
 		
 		// Emit final event
@@ -941,4 +977,45 @@ func toSnakeCase(s string) string {
 		result = append(result, r)
 	}
 	return strings.ToLower(string(result))
+}
+
+// saveCheckpoint saves a checkpoint to the checkpointer.
+func (e *Engine) saveCheckpoint(ctx context.Context, threadID, checkpointID string, step int, checkpoint map[string]interface{}) error {
+	if e.checkpointer == nil {
+		return nil
+	}
+	return e.checkpointer.Put(ctx, map[string]interface{}{
+		"thread_id":     threadID,
+		"checkpoint_id": checkpointID,
+		"step":          step,
+	}, checkpoint)
+}
+
+// deferCheckpoint defers a checkpoint save for DurabilityExit mode.
+func (e *Engine) deferCheckpoint(threadID, checkpointID string, step int, checkpoint map[string]interface{}) {
+	e.deferredCheckpoints = append(e.deferredCheckpoints, deferredCheckpoint{
+		ThreadID:     threadID,
+		CheckpointID: checkpointID,
+		Step:         step,
+		Checkpoint:   checkpoint,
+	})
+}
+
+// saveDeferredCheckpoints saves all deferred checkpoints (called at exit for DurabilityExit mode).
+func (e *Engine) saveDeferredCheckpoints(ctx context.Context) error {
+	if e.checkpointer == nil || len(e.deferredCheckpoints) == 0 {
+		return nil
+	}
+
+	var lastErr error
+	for _, dc := range e.deferredCheckpoints {
+		if err := e.saveCheckpoint(ctx, dc.ThreadID, dc.CheckpointID, dc.Step, dc.Checkpoint); err != nil {
+			lastErr = err
+			// Continue saving other checkpoints even if one fails
+		}
+	}
+
+	// Clear deferred checkpoints after attempting to save
+	e.deferredCheckpoints = nil
+	return lastErr
 }
